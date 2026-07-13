@@ -87,6 +87,9 @@ impl From<envvault_core::CoreError> for AppError {
             E::InvalidInput(message) => Self::InvalidInput { message },
             E::StaleId => Self::StaleId,
             E::NoDataDir => Self::NoDataDir,
+            E::Git(message) => Self::IoError {
+                message: format!("git: {message}"),
+            },
             E::Io(err) => Self::IoError {
                 message: err.to_string(),
             },

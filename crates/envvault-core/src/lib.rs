@@ -15,6 +15,7 @@
 
 pub mod crypto;
 pub mod detect;
+pub mod envfile;
 pub mod error;
 pub mod health;
 pub mod project;

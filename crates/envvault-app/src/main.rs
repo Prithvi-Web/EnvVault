@@ -44,6 +44,9 @@ fn specta_builder() -> Builder<tauri::Wry> {
             commands::remove_secret,
             commands::reveal_secret,
             commands::copy_secret,
+            commands::scan_env_files,
+            commands::preview_env_import,
+            commands::import_env,
         ])
         .events(collect_events![events::VaultLockedEvent])
         .error_handling(ErrorHandlingMode::Result)
@@ -81,6 +84,12 @@ fn main() {
         .setup(move |app| {
             specta.mount_events(app);
             spawn_auto_lock_monitor(app.handle().clone());
+            // Parked .env backups expire after 7 days (spec F4.4).
+            std::thread::spawn(|| {
+                if let Ok(root) = envvault_core::scanner::env_backup_root() {
+                    let _ = envvault_core::scanner::cleanup_old_backups(&root, 7);
+                }
+            });
             Ok(())
         })
         .run(tauri::generate_context!())

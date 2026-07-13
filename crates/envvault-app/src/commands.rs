@@ -412,6 +412,242 @@ pub fn reveal_secret(
     })
 }
 
+// ---------------------------------------------------------------------------
+// Phase 4: Import & Secure (spec F4)
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct EnvFileCandidate {
+    pub path: String,
+    pub file_name: String,
+}
+
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct ExposureInfo {
+    pub commit_count: u32,
+    pub first_commit: Option<DateTime<Utc>>,
+    pub last_commit: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct ImportPreviewEntry {
+    pub key: String,
+    pub value_length: u32,
+    pub detected_label: Option<String>,
+    /// A secret with this key already exists in the target environment;
+    /// importing will update it (and mark it rotated).
+    pub will_update: bool,
+    /// This key appeared more than once in the file; the last value wins.
+    pub had_duplicates: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct ImportPreview {
+    pub file_name: String,
+    pub entries: Vec<ImportPreviewEntry>,
+    pub warnings: Vec<String>,
+    pub exposure: Option<ExposureInfo>,
+}
+
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct RotationAdvice {
+    pub keys: Vec<String>,
+    pub label: String,
+    pub url: String,
+    pub steps: String,
+}
+
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct ImportResult {
+    pub imported: Vec<String>,
+    pub updated: Vec<String>,
+    pub example_path: Option<String>,
+    pub backup_path: Option<String>,
+    pub gitignore_updated: bool,
+    pub warnings: Vec<String>,
+    pub exposure: Option<ExposureInfo>,
+    pub rotation_advice: Vec<RotationAdvice>,
+}
+
+fn exposure_dto(e: &envvault_core::scanner::GitExposure) -> ExposureInfo {
+    ExposureInfo {
+        commit_count: e.commit_count.min(u32::MAX as usize) as u32,
+        first_commit: e.first_commit,
+        last_commit: e.last_commit,
+    }
+}
+
+/// Root-level plaintext env files in the project folder (templates like
+/// `.env.example` excluded).
+#[tauri::command]
+#[specta::specta]
+pub fn scan_env_files(
+    state: State<'_, AppState>,
+    project_id: Uuid,
+) -> Result<Vec<EnvFileCandidate>, AppError> {
+    read_session(&state, |vault| {
+        let project = vault.project(project_id)?;
+        Ok(envvault_core::scanner::find_env_files(&project.path)
+            .into_iter()
+            .map(|p| EnvFileCandidate {
+                file_name: p
+                    .file_name()
+                    .map(|n| n.to_string_lossy().to_string())
+                    .unwrap_or_default(),
+                path: p.display().to_string(),
+            })
+            .collect())
+    })
+}
+
+/// Parse the file and check git history WITHOUT changing anything — the
+/// user sees exactly what will happen before confirming.
+#[tauri::command]
+#[specta::specta]
+pub fn preview_env_import(
+    state: State<'_, AppState>,
+    project_id: Uuid,
+    env_id: Uuid,
+    path: String,
+) -> Result<ImportPreview, AppError> {
+    use std::path::Path;
+    let path = Path::new(&path);
+    let file_name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_default();
+
+    let content =
+        zeroize::Zeroizing::new(
+            std::fs::read_to_string(path).map_err(|e| AppError::IoError {
+                message: format!("could not read {file_name}: {e}"),
+            })?,
+        );
+    let parsed = envvault_core::envfile::parse(&content);
+
+    read_session(&state, |vault| {
+        let project = vault.project(project_id)?;
+        let env = project
+            .environments
+            .iter()
+            .find(|e| e.id == env_id)
+            .ok_or(envvault_core::CoreError::StaleId)?;
+
+        let duplicated: std::collections::HashSet<&str> = parsed
+            .entries
+            .iter()
+            .filter(|e| e.overridden)
+            .map(|e| e.key.as_str())
+            .collect();
+
+        let entries = parsed
+            .effective_entries()
+            .map(|e| ImportPreviewEntry {
+                will_update: env.secrets.iter().any(|s| s.key == e.key),
+                had_duplicates: duplicated.contains(e.key.as_str()),
+                detected_label: envvault_core::detect::detect(&e.key, e.value.expose())
+                    .map(|t| envvault_core::detect::label(t).to_string()),
+                value_length: e.value.len() as u32,
+                key: e.key.clone(),
+            })
+            .collect();
+
+        let exposure = envvault_core::scanner::git_history_exposure(&project.path, &file_name)
+            .unwrap_or(None)
+            .as_ref()
+            .map(exposure_dto);
+
+        Ok(ImportPreview {
+            file_name,
+            entries,
+            warnings: parsed.warnings.clone(),
+            exposure,
+        })
+    })
+}
+
+/// The ten-second rescue: import into the vault, write `.env.example`, fix
+/// `.gitignore`, shred the original (7-day backup), report exposure with
+/// concrete rotation instructions.
+#[tauri::command]
+#[specta::specta]
+pub fn import_env(
+    state: State<'_, AppState>,
+    project_id: Uuid,
+    env_id: Uuid,
+    path: String,
+) -> Result<ImportResult, AppError> {
+    let backup_dir = envvault_core::scanner::env_backup_root()?;
+    let outcome = mutate_and_save(&state, |vault| {
+        envvault_core::scanner::import_and_secure(
+            vault,
+            project_id,
+            env_id,
+            std::path::Path::new(&path),
+            &backup_dir,
+            envvault_core::scanner::ImportOptions::default(),
+        )
+    })?;
+
+    // Group rotation advice by detected type across the touched keys, but
+    // only when the file was actually exposed in git history.
+    let mut rotation_advice: Vec<RotationAdvice> = Vec::new();
+    if outcome.exposure.is_some() {
+        let guard = state.session();
+        if let Some(session) = guard.as_ref() {
+            if let Ok(project) = session.vault().project(project_id) {
+                if let Some(env) = project.environments.iter().find(|e| e.id == env_id) {
+                    use std::collections::BTreeMap;
+                    let mut by_type: BTreeMap<String, (Vec<String>, String, String)> =
+                        BTreeMap::new();
+                    for key in outcome.imported.iter().chain(outcome.updated.iter()) {
+                        let Some(secret) = env.secrets.iter().find(|s| &s.key == key) else {
+                            continue;
+                        };
+                        let Some(t) = secret.detected_type else {
+                            continue;
+                        };
+                        let Some((url, steps)) = envvault_core::detect::rotation_info(t) else {
+                            continue;
+                        };
+                        let label = envvault_core::detect::label(t).to_string();
+                        by_type
+                            .entry(label)
+                            .and_modify(|(keys, _, _)| keys.push(key.clone()))
+                            .or_insert((vec![key.clone()], url.to_string(), steps.to_string()));
+                    }
+                    rotation_advice = by_type
+                        .into_iter()
+                        .map(|(label, (keys, url, steps))| RotationAdvice {
+                            keys,
+                            label,
+                            url,
+                            steps,
+                        })
+                        .collect();
+                }
+            }
+        }
+    }
+
+    Ok(ImportResult {
+        imported: outcome.imported,
+        updated: outcome.updated,
+        example_path: outcome.example_path.map(|p| p.display().to_string()),
+        backup_path: outcome.backup_path.map(|p| p.display().to_string()),
+        gitignore_updated: outcome.gitignore_updated,
+        warnings: outcome.warnings,
+        exposure: outcome.exposure.as_ref().map(exposure_dto),
+        rotation_advice,
+    })
+}
+
 /// Copy without the plaintext ever entering JS. Returns the auto-clear delay
 /// so the UI can show an honest countdown.
 #[tauri::command]

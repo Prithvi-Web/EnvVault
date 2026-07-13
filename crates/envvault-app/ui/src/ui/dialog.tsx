@@ -21,6 +21,8 @@ export function Modal({ open, onOpenChange, title, description, children, danger
         <Dialog.Overlay className="overlay" />
         <Dialog.Content
           className="dialog-panel"
+          onInteractOutside={(e) => e.preventDefault()}
+          onFocusOutside={(e) => e.preventDefault()}
           onOpenAutoFocus={(e) => {
             // Focus the first field, not the close button.
             const el = (e.currentTarget as HTMLElement | null)?.querySelector<HTMLElement>(

@@ -96,6 +96,12 @@ pub struct Secret {
     /// Drives the staleness check in the health dashboard.
     pub rotated_at: DateTime<Utc>,
     pub detected_type: Option<KeyType>,
+    /// Set by Import & Secure when the source file was found in git history:
+    /// the date of the latest offending commit. The health dashboard flags
+    /// the secret as exposed until it is rotated after this date.
+    /// `serde(default)` keeps every existing vault readable unchanged.
+    #[serde(default)]
+    pub exposed_in_git_at: Option<DateTime<Utc>>,
 }
 
 impl Secret {
@@ -109,6 +115,7 @@ impl Secret {
             created_at: now,
             rotated_at: now,
             detected_type: None,
+            exposed_in_git_at: None,
         }
     }
 }

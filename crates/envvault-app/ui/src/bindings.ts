@@ -44,6 +44,22 @@ export const commands = {
 	 *  so the UI can show an honest countdown.
 	 */
 	copySecret: (projectId: string, envId: string, secretId: string) => typedError<number, AppError>(__TAURI_INVOKE("copy_secret", { projectId, envId, secretId })),
+	/**
+	 *  Root-level plaintext env files in the project folder (templates like
+	 *  `.env.example` excluded).
+	 */
+	scanEnvFiles: (projectId: string) => typedError<EnvFileCandidate[], AppError>(__TAURI_INVOKE("scan_env_files", { projectId })),
+	/**
+	 *  Parse the file and check git history WITHOUT changing anything — the
+	 *  user sees exactly what will happen before confirming.
+	 */
+	previewEnvImport: (projectId: string, envId: string, path: string) => typedError<ImportPreview, AppError>(__TAURI_INVOKE("preview_env_import", { projectId, envId, path })),
+	/**
+	 *  The ten-second rescue: import into the vault, write `.env.example`, fix
+	 *  `.gitignore`, shred the original (7-day backup), report exposure with
+	 *  concrete rotation instructions.
+	 */
+	importEnv: (projectId: string, envId: string, path: string) => typedError<ImportResult, AppError>(__TAURI_INVOKE("import_env", { projectId, envId, path })),
 };
 
 /** Events */
@@ -87,11 +103,53 @@ export type CreatedVaultInfo = {
 	recoveryKey: string | null,
 };
 
+export type EnvFileCandidate = {
+	path: string,
+	fileName: string,
+};
+
 export type EnvironmentSummary = {
 	id: string,
 	name: string,
 	isProduction: boolean,
 	secretCount: number,
+};
+
+export type ExposureInfo = {
+	commitCount: number,
+	firstCommit: string | null,
+	lastCommit: string | null,
+};
+
+export type ImportPreview = {
+	fileName: string,
+	entries: ImportPreviewEntry[],
+	warnings: string[],
+	exposure: ExposureInfo | null,
+};
+
+export type ImportPreviewEntry = {
+	key: string,
+	valueLength: number,
+	detectedLabel: string | null,
+	/**
+	 *  A secret with this key already exists in the target environment;
+	 *  importing will update it (and mark it rotated).
+	 */
+	willUpdate: boolean,
+	/**  This key appeared more than once in the file; the last value wins. */
+	hadDuplicates: boolean,
+};
+
+export type ImportResult = {
+	imported: string[],
+	updated: string[],
+	examplePath: string | null,
+	backupPath: string | null,
+	gitignoreUpdated: boolean,
+	warnings: string[],
+	exposure: ExposureInfo | null,
+	rotationAdvice: RotationAdvice[],
 };
 
 export type KeyType = "StripeSecret" | "StripePublishable" | "AwsAccessKey" | "AwsSecretKey" | "OpenAi" | "Anthropic" | "GitHubToken" | "GoogleApi" | "SendGrid" | "Twilio" | "DatabaseUrl" | "JwtSecret" | "PrivateKey" | "Generic";
@@ -102,6 +160,13 @@ export type ProjectSummary = {
 	path: string,
 	createdAt: string,
 	environments: EnvironmentSummary[],
+};
+
+export type RotationAdvice = {
+	keys: string[],
+	label: string,
+	url: string,
+	steps: string,
 };
 
 export type SecretMeta = {

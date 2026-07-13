@@ -3,8 +3,14 @@
 // keyboard: ⌘K palette, N new secret, / search, ⌘L lock.
 
 import { useEffect, useRef, useState } from "react";
-import { KeyRound, LockOpen, Plus, Search } from "lucide-react";
-import { commands, type EnvironmentSummary, type ProjectSummary, type SecretMeta } from "../bindings";
+import { FileWarning, KeyRound, LockOpen, Plus, Search } from "lucide-react";
+import {
+  commands,
+  type EnvFileCandidate,
+  type EnvironmentSummary,
+  type ProjectSummary,
+  type SecretMeta,
+} from "../bindings";
 import { useVault, useSelectedProject } from "../store";
 import { describeError } from "../lib/errors";
 import { loadScorer, scorePassword, REQUIRED_SCORE, type Strength } from "../lib/password";
@@ -15,6 +21,7 @@ import { Sidebar } from "./home/Sidebar";
 import { EnvTabs } from "./home/EnvTabs";
 import { SecretsTable } from "./home/SecretsTable";
 import { SecretDialog, type SecretDialogMode } from "./home/SecretDialog";
+import { ImportDialog } from "./home/ImportDialog";
 import { AddProjectDialog } from "./home/AddProjectDialog";
 import { AddEnvDialog } from "./home/AddEnvDialog";
 import { CommandPalette } from "./home/CommandPalette";
@@ -37,11 +44,27 @@ export default function Home() {
   const [deleteSecret, setDeleteSecret] = useState<SecretMeta | null>(null);
   const [deleteProject, setDeleteProject] = useState<ProjectSummary | null>(null);
   const [deleteEnv, setDeleteEnv] = useState<EnvironmentSummary | null>(null);
+  const [envFiles, setEnvFiles] = useState<EnvFileCandidate[]>([]);
+  const [importFiles, setImportFiles] = useState<EnvFileCandidate[] | null>(null);
   const searchRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     void loadProjects();
   }, [loadProjects]);
+
+  // Watch for plaintext env files whenever the selected project changes.
+  async function rescanEnvFiles(projectId: string | null | undefined) {
+    if (!projectId) {
+      setEnvFiles([]);
+      return;
+    }
+    const result = await commands.scanEnvFiles(projectId);
+    setEnvFiles(result.status === "ok" ? result.data : []);
+  }
+
+  useEffect(() => {
+    void rescanEnvFiles(project?.id);
+  }, [project?.id]);
 
   useEffect(() => {
     setFilter("");
@@ -193,6 +216,25 @@ export default function Home() {
                 </div>
               </div>
 
+              {envFiles.length > 0 && (
+                <div className="rise-in mt-3 flex items-center gap-2.5 rounded-[9px] border border-[rgba(255,190,76,0.35)] bg-[rgba(255,190,76,0.08)] px-3 py-2">
+                  <FileWarning size={15} color="var(--warn)" className="flex-none" />
+                  <span className="min-w-0 flex-1 truncate text-[12px] text-[var(--text-dim)]">
+                    <span className="mono text-[var(--warn)]">
+                      {envFiles.map((f) => f.fileName).join(", ")}
+                    </span>{" "}
+                    — plaintext secrets sitting in this project folder.
+                  </span>
+                  <Button
+                    variant="ghost"
+                    style={{ height: 26, borderColor: "rgba(255,190,76,0.4)" }}
+                    onClick={() => setImportFiles(envFiles)}
+                  >
+                    Import &amp; Secure
+                  </Button>
+                </div>
+              )}
+
               {env?.isProduction && (
                 <div className="prod-banner mt-3">
                   <span className="status-dot" style={{ background: "var(--danger)" }} />
@@ -218,6 +260,17 @@ export default function Home() {
       </div>
 
       <SecretDialog state={secretDialog} onClose={() => setSecretDialog(null)} />
+      <ImportDialog
+        files={importFiles}
+        onClose={(didImport) => {
+          setImportFiles(null);
+          if (didImport) {
+            void rescanEnvFiles(project?.id);
+            void loadSecrets();
+            void loadProjects();
+          }
+        }}
+      />
       <AddProjectDialog open={addProjectOpen} onClose={() => setAddProjectOpen(false)} />
       <AddEnvDialog open={addEnvOpen} onClose={() => setAddEnvOpen(false)} />
       <CommandPalette

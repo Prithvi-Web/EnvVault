@@ -131,6 +131,60 @@ pub fn label(t: KeyType) -> &'static str {
     }
 }
 
+/// Where and how to rotate a leaked key of this type — specific, actionable,
+/// per spec F7. Shown the moment an exposure is discovered (F4) and in the
+/// health dashboard. The app never opens these URLs itself (it makes no
+/// network requests and never will); they are displayed for the user.
+pub fn rotation_info(t: KeyType) -> Option<(&'static str, &'static str)> {
+    match t {
+        KeyType::StripeSecret | KeyType::StripePublishable => Some((
+            "https://dashboard.stripe.com/apikeys",
+            "Roll the key in Stripe's dashboard, deploy the new key, then delete the old one.",
+        )),
+        KeyType::AwsAccessKey | KeyType::AwsSecretKey => Some((
+            "https://console.aws.amazon.com/iam/home#/security_credentials",
+            "Create a second access key, switch your app to it, verify, then deactivate and delete the leaked key.",
+        )),
+        KeyType::OpenAi => Some((
+            "https://platform.openai.com/api-keys",
+            "Create a replacement key, update your app, then revoke the leaked key.",
+        )),
+        KeyType::Anthropic => Some((
+            "https://console.anthropic.com/settings/keys",
+            "Create a replacement key, update your app, then disable the leaked key.",
+        )),
+        KeyType::GitHubToken => Some((
+            "https://github.com/settings/tokens",
+            "Delete the leaked token and generate a new one with the same scopes.",
+        )),
+        KeyType::GoogleApi => Some((
+            "https://console.cloud.google.com/apis/credentials",
+            "Regenerate the key (or create a new one with restrictions), update your app, delete the old one.",
+        )),
+        KeyType::SendGrid => Some((
+            "https://app.sendgrid.com/settings/api_keys",
+            "Create a new key, update your app, then delete the leaked key.",
+        )),
+        KeyType::Twilio => Some((
+            "https://console.twilio.com",
+            "Rotate the auth token (Account → API keys & tokens); the secondary-token flow avoids downtime.",
+        )),
+        KeyType::DatabaseUrl => Some((
+            "",
+            "Change the database user's password (or create a new user), update the URL everywhere, drop old credentials.",
+        )),
+        KeyType::JwtSecret => Some((
+            "",
+            "Generate a new high-entropy secret, deploy it, and invalidate outstanding tokens if your setup allows.",
+        )),
+        KeyType::PrivateKey => Some((
+            "",
+            "Generate a new key pair, distribute the new public key, then destroy the leaked private key.",
+        )),
+        KeyType::Generic => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

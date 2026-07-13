@@ -10,6 +10,9 @@ age.workspace = true
 chrono.workspace = true
 dirs.workspace = true
 fs2.workspace = true
+# Local repository reading only (history scan, ignore checks). Network
+# transports disabled: this build of git2 cannot fetch, ever.
+git2 = { version = "0.20", default-features = false }
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
@@ -24,3 +27,5 @@ specta = ["dep:specta"]
 
 [dev-dependencies]
 tempfile = "3"
+proptest = "1"
+filetime = "0.2"

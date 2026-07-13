@@ -13,14 +13,18 @@ interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
   variant?: "primary" | "ghost";
 }
 
-export function Button({ variant = "primary", className = "", ...rest }: ButtonProps) {
+export const Button = forwardRef<HTMLButtonElement, ButtonProps>(function Button(
+  { variant = "primary", className = "", ...rest },
+  ref,
+) {
   return (
     <button
+      ref={ref}
       className={`btn ${variant === "primary" ? "btn-primary" : "btn-ghost"} ${className}`}
       {...rest}
     />
   );
-}
+});
 
 interface TextFieldProps extends InputHTMLAttributes<HTMLInputElement> {
   hasError?: boolean;

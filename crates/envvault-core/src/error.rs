@@ -50,6 +50,9 @@ pub enum CoreError {
     #[error("could not determine the OS application-data directory")]
     NoDataDir,
 
+    #[error("git error: {0}")]
+    Git(String),
+
     #[error("i/o error: {0}")]
     Io(#[from] std::io::Error),
 
