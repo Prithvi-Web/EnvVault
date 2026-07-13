@@ -1,0 +1,13 @@
+[package]
+name = "envvault-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "The `envvault` CLI: injects vault secrets into a child process environment."
+
+[[bin]]
+name = "envvault"
+path = "src/main.rs"
+
+[dependencies]
+envvault-core.workspace = true

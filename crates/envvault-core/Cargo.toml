@@ -1,0 +1,20 @@
+[package]
+name = "envvault-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "EnvVault core: crypto, vault I/O, and domain logic. Pure library — no Tauri, no CLI dependencies."
+
+[dependencies]
+age.workspace = true
+chrono.workspace = true
+dirs.workspace = true
+secrecy.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+uuid.workspace = true
+zeroize.workspace = true
+
+[dev-dependencies]
+tempfile = "3"

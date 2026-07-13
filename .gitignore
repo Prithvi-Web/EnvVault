@@ -1,0 +1,6 @@
+/target
+node_modules/
+crates/envvault-app/ui/dist/
+crates/envvault-app/gen/
+.DS_Store
+*.log
