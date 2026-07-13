@@ -604,7 +604,9 @@ fn atomic_write_unlocked(path: &Path, bytes: &[u8]) -> Result<(), CoreError> {
 }
 
 fn fsync_file(path: &Path) -> Result<(), CoreError> {
-    File::open(path)?.sync_all()?;
+    // Must open with WRITE access: Windows' FlushFileBuffers rejects
+    // read-only handles ("Access is denied"), while POSIX doesn't care.
+    OpenOptions::new().write(true).open(path)?.sync_all()?;
     Ok(())
 }
 
