@@ -21,3 +21,9 @@ pub mod secret;
 pub mod vault;
 
 pub use error::CoreError;
+
+// Single source of truth for the secrecy/age versions used across the
+// workspace: the CLI and app import these re-exports, so a version mismatch
+// (two incompatible `SecretString` types) cannot happen.
+pub use age;
+pub use age::secrecy;
