@@ -7,8 +7,10 @@
 //! `unwrap()` / `expect()` are compile errors in non-test code: fail closed,
 //! return a typed [`CoreError`] instead.
 
-#![cfg_attr(not(test), deny(clippy::unwrap_used, clippy::expect_used))]
-#![deny(clippy::panic)]
+#![cfg_attr(
+    not(test),
+    deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)
+)]
 #![warn(missing_debug_implementations)]
 
 pub mod crypto;
@@ -16,6 +18,7 @@ pub mod detect;
 pub mod error;
 pub mod health;
 pub mod project;
+pub mod ratelimit;
 pub mod scanner;
 pub mod secret;
 pub mod vault;

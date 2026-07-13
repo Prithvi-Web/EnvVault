@@ -1,65 +1,62 @@
-import { useEffect, useState } from "react";
-import { commands, type AppInfo, type AppError } from "./bindings";
+// Shell: routes by vault state, wires the auto-lock event, the ⌘L shortcut,
+// and the (throttled) activity signal that defers auto-lock.
 
-/**
- * Phase 0 shell: proves the typed IPC pipeline end-to-end.
- * The real UI (unlock screen, vault views) lands in Phases 2–3.
- */
+import { useEffect, useRef } from "react";
+import { commands, events } from "./bindings";
+import { useVault } from "./store";
+import Onboarding from "./screens/Onboarding";
+import Unlock from "./screens/Unlock";
+import Home from "./screens/Home";
+
 export default function App() {
-  const [info, setInfo] = useState<AppInfo | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const status = useVault((s) => s.status);
+  const refresh = useVault((s) => s.refresh);
+  const markLocked = useVault((s) => s.markLocked);
+  const lastTouch = useRef(0);
 
   useEffect(() => {
-    commands.appInfo().then((result) => {
-      if (result.status === "ok") {
-        setInfo(result.data);
-      } else {
-        setError(describeError(result.error));
+    void refresh();
+
+    // Rust locked the vault (idle timeout): drop everything, show the lock.
+    const unlisten = events.vaultLockedEvent.listen(() => markLocked());
+
+    // ⌘L / Ctrl+L locks instantly, from anywhere.
+    function onKeyDown(e: KeyboardEvent) {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "l") {
+        e.preventDefault();
+        void commands.lockVault().then((r) => {
+          if (r.status === "ok") markLocked();
+        });
       }
-    });
-  }, []);
+      touch();
+    }
+
+    // Real user activity defers auto-lock; throttled to one ping / 25s.
+    function touch() {
+      const now = Date.now();
+      if (now - lastTouch.current > 25_000) {
+        lastTouch.current = now;
+        void commands.touchActivity();
+      }
+    }
+
+    window.addEventListener("keydown", onKeyDown);
+    window.addEventListener("pointerdown", touch);
+    window.addEventListener("pointermove", touch);
+    return () => {
+      void unlisten.then((fn) => fn());
+      window.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("pointerdown", touch);
+      window.removeEventListener("pointermove", touch);
+    };
+  }, [refresh, markLocked]);
 
   return (
-    <main className="flex h-screen flex-col items-center justify-center gap-3 bg-neutral-950 text-neutral-100">
-      <h1 className="text-2xl font-semibold tracking-tight">EnvVault</h1>
-      {info && (
-        <div className="text-center text-sm text-neutral-400">
-          <p>v{info.version} — typed IPC bridge is live</p>
-          <p className="mt-1 font-mono text-xs">
-            vault: {info.vaultPath} ({info.vaultExists ? "exists" : "not created yet"})
-          </p>
-        </div>
-      )}
-      {error && <p className="text-sm text-red-400">{error}</p>}
-    </main>
+    <div className="app-shell">
+      {status === "loading" && null}
+      {status === "no-vault" && <Onboarding />}
+      {status === "locked" && <Unlock />}
+      {status === "unlocked" && <Home />}
+    </div>
   );
-}
-
-function describeError(e: AppError): string {
-  switch (e.kind) {
-    case "VaultLocked":
-      return "The vault is locked.";
-    case "WrongPassword":
-      return `Wrong password (${e.detail.attemptsRemaining} attempts remaining).`;
-    case "VaultCorrupted":
-      return `Vault file corrupted at ${e.detail.path}.`;
-    case "VaultNotFound":
-      return "No vault exists yet.";
-    case "VaultAlreadyExists":
-      return `A vault already exists at ${e.detail.path}.`;
-    case "ProjectNotFound":
-      return `No project registered for ${e.detail.path}.`;
-    case "SecretNameTaken":
-      return `A secret named ${e.detail.name} already exists.`;
-    case "IoError":
-      return `I/O error: ${e.detail.message}`;
-    case "NoDataDir":
-      return "Could not find the application data directory.";
-    default: {
-      // Exhaustiveness guard: a new Rust error variant that is not handled
-      // above makes this assignment — and therefore the build — fail.
-      const unhandled: never = e;
-      return `Unhandled error: ${JSON.stringify(unhandled)}`;
-    }
-  }
 }

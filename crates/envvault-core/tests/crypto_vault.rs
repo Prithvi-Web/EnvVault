@@ -84,7 +84,10 @@ fn wrong_password_is_typed_error_not_panic() {
     let (path, _) = seeded_vault(dir.path(), false);
 
     let err = unlock_vault(&path, pw("wrong password")).unwrap_err();
-    assert!(matches!(err, CoreError::WrongPassword), "got: {err:?}");
+    assert!(
+        matches!(err, CoreError::WrongPassword { .. }),
+        "got: {err:?}"
+    );
 }
 
 #[test]
@@ -189,7 +192,7 @@ fn corrupted_wrapped_identity_never_unlocks_and_never_panics() {
     // AEAD makes tampering indistinguishable from a wrong passphrase; either
     // typed error is acceptable. Success or panic is not.
     match result {
-        Err(CoreError::WrongPassword) | Err(CoreError::VaultCorrupted { .. }) => {}
+        Err(CoreError::WrongPassword { .. }) | Err(CoreError::VaultCorrupted { .. }) => {}
         Err(other) => panic!("unexpected error: {other:?}"),
         Ok(_) => panic!("tampered wrapped identity must never unlock"),
     }
@@ -278,7 +281,7 @@ fn change_password_rotates_credential() {
         .expect("change password");
 
     let err = unlock_vault(&path, pw("correct horse battery staple")).unwrap_err();
-    assert!(matches!(err, CoreError::WrongPassword));
+    assert!(matches!(err, CoreError::WrongPassword { .. }));
     let ok = unlock_vault(&path, pw("new password entirely")).unwrap();
     assert_eq!(ok.vault().projects[0].name, "acme-api");
 }
@@ -292,7 +295,31 @@ fn change_password_requires_current_password() {
     let err = unlocked
         .change_password_with_work_factor(&pw("not the password"), pw("new"), TEST_WORK_FACTOR)
         .unwrap_err();
-    assert!(matches!(err, CoreError::WrongPassword));
+    assert!(matches!(err, CoreError::WrongPassword { .. }));
+}
+
+/// The "forgot password" completion: unlock with the recovery key, set a new
+/// master password without knowing the old one. Old password dies, new
+/// password works, recovery key keeps working.
+#[test]
+fn rekey_after_recovery_unlock() {
+    let dir = tempfile::tempdir().unwrap();
+    let (path, created) = seeded_vault(dir.path(), true);
+    let recovery = created.recovery_key.unwrap();
+
+    let mut unlocked = unlock_vault(&path, recovery.clone()).unwrap();
+    assert!(unlocked.via_recovery);
+    unlocked
+        .rekey_with_work_factor(pw("brand new password"), TEST_WORK_FACTOR)
+        .unwrap();
+    assert!(!unlocked.via_recovery);
+
+    let err = unlock_vault(&path, pw("correct horse battery staple")).unwrap_err();
+    assert!(matches!(err, CoreError::WrongPassword { .. }));
+    let ok = unlock_vault(&path, pw("brand new password")).unwrap();
+    assert_eq!(ok.vault().projects[0].name, "acme-api");
+    let via_rk = unlock_vault(&path, recovery).unwrap();
+    assert!(via_rk.via_recovery);
 }
 
 #[test]

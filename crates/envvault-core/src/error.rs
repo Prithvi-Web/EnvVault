@@ -11,7 +11,14 @@ pub enum CoreError {
     VaultLocked,
 
     #[error("wrong master password")]
-    WrongPassword,
+    WrongPassword {
+        /// Populated by the rate-limited unlock path: attempts left before
+        /// the 5-minute lockout engages. `None` from raw crypto operations.
+        attempts_remaining: Option<u32>,
+    },
+
+    #[error("too many failed attempts — try again in {retry_after_seconds}s")]
+    RateLimited { retry_after_seconds: u64 },
 
     #[error("vault file is corrupted or not a valid EnvVault file: {path}")]
     VaultCorrupted { path: PathBuf, reason: String },

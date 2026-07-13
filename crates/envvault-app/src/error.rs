@@ -11,14 +11,41 @@ use specta::Type;
 #[serde(tag = "kind", content = "detail", rename_all_fields = "camelCase")]
 pub enum AppError {
     VaultLocked,
-    WrongPassword { attempts_remaining: u32 },
-    VaultCorrupted { path: String },
+    WrongPassword {
+        /// Attempts left before the 5-minute lockout. `null` when the failure
+        /// came from a non-throttled path (e.g. wrong current password during
+        /// a password change).
+        attempts_remaining: Option<u32>,
+    },
+    RateLimited {
+        retry_after_seconds: u32,
+    },
+    VaultCorrupted {
+        path: String,
+    },
     VaultNotFound,
-    VaultAlreadyExists { path: String },
-    ProjectNotFound { path: String },
-    SecretNameTaken { name: String },
-    IoError { message: String },
+    VaultAlreadyExists {
+        path: String,
+    },
+    ProjectNotFound {
+        path: String,
+    },
+    SecretNameTaken {
+        name: String,
+    },
+    IoError {
+        message: String,
+    },
     NoDataDir,
+}
+
+impl AppError {
+    /// A background task failed to complete (thread panic/cancellation).
+    pub fn from_join(e: tauri::Error) -> Self {
+        AppError::IoError {
+            message: format!("background task failed: {e}"),
+        }
+    }
 }
 
 impl From<envvault_core::CoreError> for AppError {
@@ -26,9 +53,11 @@ impl From<envvault_core::CoreError> for AppError {
         use envvault_core::CoreError as E;
         match e {
             E::VaultLocked => Self::VaultLocked,
-            // attempts_remaining is wired up with rate limiting in Phase 2.
-            E::WrongPassword => Self::WrongPassword {
-                attempts_remaining: 0,
+            E::WrongPassword { attempts_remaining } => Self::WrongPassword { attempts_remaining },
+            E::RateLimited {
+                retry_after_seconds,
+            } => Self::RateLimited {
+                retry_after_seconds: retry_after_seconds.min(u32::MAX as u64) as u32,
             },
             E::VaultCorrupted { path, .. } => Self::VaultCorrupted {
                 path: path.display().to_string(),

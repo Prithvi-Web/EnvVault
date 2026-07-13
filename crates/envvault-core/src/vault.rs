@@ -139,6 +139,12 @@ impl std::fmt::Debug for CreatedVault {
 /// The vault lives in the OS app-data directory — never inside a project
 /// directory, and there is deliberately no option to change that.
 pub fn default_vault_dir() -> Result<PathBuf, CoreError> {
+    // Debug-build-only test hook so dev runs and E2E tests never touch the
+    // real vault. Compiled out of release binaries: users have no such knob.
+    #[cfg(debug_assertions)]
+    if let Ok(dir) = std::env::var("ENVVAULT_DEV_VAULT_DIR") {
+        return Ok(PathBuf::from(dir));
+    }
     dirs::data_dir()
         .map(|d| d.join("EnvVault"))
         .ok_or(CoreError::NoDataDir)
@@ -258,7 +264,9 @@ pub fn unlock_vault(path: &Path, passphrase: SecretString) -> Result<UnlockedVau
                     });
                 }
             }
-            Err(CoreError::WrongPassword)
+            Err(CoreError::WrongPassword {
+                attempts_remaining: None,
+            })
         }
         Err(other) => Err(map_crypto(other, path)),
     }
@@ -333,6 +341,31 @@ impl UnlockedVault {
     /// zeroizes on drop; no key material survives (none was retained).
     pub fn lock(self) {
         drop(self);
+    }
+
+    /// Replace the vault identity entirely and wrap the new one under
+    /// `new_password`. This is the "forgot my password, unlocked with the
+    /// recovery key" path: it needs no knowledge of the old password or the
+    /// old identity. The recovery key keeps working (the payload stays
+    /// encrypted to the recovery recipient too).
+    pub fn rekey(&mut self, new_password: SecretString) -> Result<(), CoreError> {
+        self.rekey_with_work_factor(new_password, crypto::SCRYPT_WORK_FACTOR_LOG_N)
+    }
+
+    #[doc(hidden)]
+    pub fn rekey_with_work_factor(
+        &mut self,
+        new_password: SecretString,
+        work_factor_log_n: u8,
+    ) -> Result<(), CoreError> {
+        let identity = crypto::generate_identity();
+        let recipient = identity.to_public();
+        let wrapped_identity = crypto::wrap_identity(&identity, &new_password, work_factor_log_n)
+            .map_err(|e| map_crypto(e, &self.path))?;
+        self.wrapped_identity = wrapped_identity;
+        self.recipient = recipient;
+        self.via_recovery = false;
+        self.save()
     }
 }
 
@@ -623,7 +656,9 @@ fn corrupted(path: &Path, reason: String) -> CoreError {
 
 fn map_crypto(e: CryptoError, path: &Path) -> CoreError {
     match e {
-        CryptoError::WrongPassphrase => CoreError::WrongPassword,
+        CryptoError::WrongPassphrase => CoreError::WrongPassword {
+            attempts_remaining: None,
+        },
         CryptoError::Corrupted(reason) => corrupted(path, reason),
         CryptoError::Io(io) => CoreError::Io(io),
     }

@@ -12,7 +12,8 @@ tauri-build = { version = "2", features = [] }
 envvault-core.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-tauri = { version = "2", features = [] }
+tauri = { version = "2", features = ["macos-private-api"] }
+tauri-plugin-clipboard-manager = "2"
 specta = { version = "=2.0.0-rc.25", features = ["derive", "uuid", "chrono"] }
 tauri-specta = { version = "=2.0.0-rc.25", features = ["derive", "typescript"] }
 specta-typescript = "0.0.12"
