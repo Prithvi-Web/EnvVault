@@ -33,6 +33,16 @@ pub enum AppError {
     SecretNameTaken {
         name: String,
     },
+    EnvironmentNameTaken {
+        name: String,
+    },
+    DuplicateProjectPath {
+        path: String,
+    },
+    InvalidInput {
+        message: String,
+    },
+    StaleId,
     IoError {
         message: String,
     },
@@ -70,6 +80,12 @@ impl From<envvault_core::CoreError> for AppError {
                 path: path.display().to_string(),
             },
             E::SecretNameTaken(name) => Self::SecretNameTaken { name },
+            E::EnvironmentNameTaken(name) => Self::EnvironmentNameTaken { name },
+            E::DuplicateProjectPath(path) => Self::DuplicateProjectPath {
+                path: path.display().to_string(),
+            },
+            E::InvalidInput(message) => Self::InvalidInput { message },
+            E::StaleId => Self::StaleId,
             E::NoDataDir => Self::NoDataDir,
             E::Io(err) => Self::IoError {
                 message: err.to_string(),

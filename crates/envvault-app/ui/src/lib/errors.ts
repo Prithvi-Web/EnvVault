@@ -27,6 +27,14 @@ export function describeError(e: AppError): string {
       return `No project is registered for ${e.detail.path}.`;
     case "SecretNameTaken":
       return `A secret named ${e.detail.name} already exists here.`;
+    case "EnvironmentNameTaken":
+      return `An environment named ${e.detail.name} already exists in this project.`;
+    case "DuplicateProjectPath":
+      return `That folder is already registered as a project: ${e.detail.path}`;
+    case "InvalidInput":
+      return e.detail.message;
+    case "StaleId":
+      return "That item no longer exists — it may have been removed elsewhere.";
     case "IoError":
       return `Something went wrong on disk: ${e.detail.message}`;
     case "NoDataDir":

@@ -22,6 +22,28 @@ export const commands = {
 	 *  or its own state access.
 	 */
 	touchActivity: () => __TAURI_INVOKE<void>("touch_activity"),
+	listProjects: () => typedError<ProjectSummary[], AppError>(__TAURI_INVOKE("list_projects")),
+	addProject: (name: string, path: string) => typedError<ProjectSummary, AppError>(__TAURI_INVOKE("add_project", { name, path })),
+	renameProject: (projectId: string, name: string) => typedError<null, AppError>(__TAURI_INVOKE("rename_project", { projectId, name })),
+	removeProject: (projectId: string) => typedError<null, AppError>(__TAURI_INVOKE("remove_project", { projectId })),
+	addEnvironment: (projectId: string, name: string, isProduction: boolean) => typedError<null, AppError>(__TAURI_INVOKE("add_environment", { projectId, name, isProduction })),
+	removeEnvironment: (projectId: string, envId: string) => typedError<null, AppError>(__TAURI_INVOKE("remove_environment", { projectId, envId })),
+	listSecrets: (projectId: string, envId: string) => typedError<SecretMeta[], AppError>(__TAURI_INVOKE("list_secrets", { projectId, envId })),
+	addSecret: (projectId: string, envId: string, key: string, value: string, note: string | null) => typedError<null, AppError>(__TAURI_INVOKE("add_secret", { projectId, envId, key, value, note })),
+	/**  `value: None` keeps the current value; `note: Some("")` clears the note. */
+	updateSecret: (projectId: string, envId: string, secretId: string, key: string | null, value: string | null, note: string | null) => typedError<null, AppError>(__TAURI_INVOKE("update_secret", { projectId, envId, secretId, key, value, note })),
+	removeSecret: (projectId: string, envId: string, secretId: string) => typedError<null, AppError>(__TAURI_INVOKE("remove_secret", { projectId, envId, secretId })),
+	/**
+	 *  The one deliberate path where plaintext crosses to the UI, for display in
+	 *  a masked-by-default row the user explicitly revealed. The frontend keeps
+	 *  it in component-local state only and drops it on hide/navigation/lock.
+	 */
+	revealSecret: (projectId: string, envId: string, secretId: string) => typedError<string, AppError>(__TAURI_INVOKE("reveal_secret", { projectId, envId, secretId })),
+	/**
+	 *  Copy without the plaintext ever entering JS. Returns the auto-clear delay
+	 *  so the UI can show an honest countdown.
+	 */
+	copySecret: (projectId: string, envId: string, secretId: string) => typedError<number, AppError>(__TAURI_INVOKE("copy_secret", { projectId, envId, secretId })),
 };
 
 /** Events */
@@ -47,7 +69,13 @@ export type AppError = { kind: "VaultLocked" } | { kind: "WrongPassword"; detail
 	path: string,
 } } | { kind: "SecretNameTaken"; detail: {
 	name: string,
-} } | { kind: "IoError"; detail: {
+} } | { kind: "EnvironmentNameTaken"; detail: {
+	name: string,
+} } | { kind: "DuplicateProjectPath"; detail: {
+	path: string,
+} } | { kind: "InvalidInput"; detail: {
+	message: string,
+} } | { kind: "StaleId" } | { kind: "IoError"; detail: {
 	message: string,
 } } | { kind: "NoDataDir" };
 
@@ -57,6 +85,34 @@ export type CreatedVaultInfo = {
 	 *  persisted anywhere by the frontend.
 	 */
 	recoveryKey: string | null,
+};
+
+export type EnvironmentSummary = {
+	id: string,
+	name: string,
+	isProduction: boolean,
+	secretCount: number,
+};
+
+export type KeyType = "StripeSecret" | "StripePublishable" | "AwsAccessKey" | "AwsSecretKey" | "OpenAi" | "Anthropic" | "GitHubToken" | "GoogleApi" | "SendGrid" | "Twilio" | "DatabaseUrl" | "JwtSecret" | "PrivateKey" | "Generic";
+
+export type ProjectSummary = {
+	id: string,
+	name: string,
+	path: string,
+	createdAt: string,
+	environments: EnvironmentSummary[],
+};
+
+export type SecretMeta = {
+	id: string,
+	key: string,
+	note: string | null,
+	detectedType: KeyType | null,
+	detectedLabel: string | null,
+	createdAt: string,
+	rotatedAt: string,
+	valueLength: number,
 };
 
 export type UnlockOutcome = {

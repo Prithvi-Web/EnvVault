@@ -138,3 +138,307 @@ pub async fn rekey(state: State<'_, AppState>, new_password: String) -> Result<(
 pub fn touch_activity(state: State<'_, AppState>) {
     state.touch();
 }
+
+// ---------------------------------------------------------------------------
+// Phase 3: projects, environments, secret CRUD.
+// DTO rule (§4.3): list/summary types NEVER contain a secret value. Plaintext
+// leaves Rust only via `reveal_secret` (explicit user action) and never via
+// `copy_secret` (Rust writes the clipboard directly).
+// ---------------------------------------------------------------------------
+
+use chrono::{DateTime, Utc};
+use envvault_core::detect::KeyType;
+use envvault_core::secret::SecretValue;
+use envvault_core::vault::{SecretUpdate, Vault};
+use uuid::Uuid;
+
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct EnvironmentSummary {
+    pub id: Uuid,
+    pub name: String,
+    pub is_production: bool,
+    pub secret_count: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectSummary {
+    pub id: Uuid,
+    pub name: String,
+    pub path: String,
+    pub created_at: DateTime<Utc>,
+    pub environments: Vec<EnvironmentSummary>,
+}
+
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct SecretMeta {
+    pub id: Uuid,
+    pub key: String,
+    pub note: Option<String>,
+    pub detected_type: Option<KeyType>,
+    pub detected_label: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub rotated_at: DateTime<Utc>,
+    pub value_length: u32,
+}
+
+fn project_summary(p: &envvault_core::project::Project) -> ProjectSummary {
+    ProjectSummary {
+        id: p.id,
+        name: p.name.clone(),
+        path: p.path.display().to_string(),
+        created_at: p.created_at,
+        environments: p
+            .environments
+            .iter()
+            .map(|e| EnvironmentSummary {
+                id: e.id,
+                name: e.name.clone(),
+                is_production: e.is_production,
+                secret_count: e.secrets.len() as u32,
+            })
+            .collect(),
+    }
+}
+
+/// Run a mutation, persist it, roll the in-memory model back if the save
+/// fails. Memory and disk never diverge silently (fail closed, §8.4).
+fn mutate_and_save<T>(
+    state: &AppState,
+    f: impl FnOnce(&mut Vault) -> Result<T, envvault_core::CoreError>,
+) -> Result<T, AppError> {
+    let mut guard = state.session();
+    let session = guard.as_mut().ok_or(AppError::VaultLocked)?;
+    let snapshot = session.vault().clone();
+
+    let result = f(session.vault_mut())
+        .map_err(AppError::from)
+        .and_then(|value| session.save().map_err(AppError::from).map(|()| value));
+
+    match result {
+        Ok(value) => {
+            state.touch();
+            Ok(value)
+        }
+        Err(e) => {
+            *session.vault_mut() = snapshot;
+            Err(e)
+        }
+    }
+}
+
+fn read_session<T>(
+    state: &AppState,
+    f: impl FnOnce(&Vault) -> Result<T, envvault_core::CoreError>,
+) -> Result<T, AppError> {
+    let guard = state.session();
+    let session = guard.as_ref().ok_or(AppError::VaultLocked)?;
+    state.touch();
+    f(session.vault()).map_err(AppError::from)
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn list_projects(state: State<'_, AppState>) -> Result<Vec<ProjectSummary>, AppError> {
+    read_session(&state, |vault| {
+        Ok(vault.projects.iter().map(project_summary).collect())
+    })
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn add_project(
+    state: State<'_, AppState>,
+    name: String,
+    path: String,
+) -> Result<ProjectSummary, AppError> {
+    let id = mutate_and_save(&state, |vault| vault.add_project(name, path.into()))?;
+    read_session(&state, move |vault| Ok(project_summary(vault.project(id)?)))
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn rename_project(
+    state: State<'_, AppState>,
+    project_id: Uuid,
+    name: String,
+) -> Result<(), AppError> {
+    mutate_and_save(&state, |vault| vault.rename_project(project_id, name))
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn remove_project(state: State<'_, AppState>, project_id: Uuid) -> Result<(), AppError> {
+    mutate_and_save(&state, |vault| vault.remove_project(project_id))
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn add_environment(
+    state: State<'_, AppState>,
+    project_id: Uuid,
+    name: String,
+    is_production: bool,
+) -> Result<(), AppError> {
+    mutate_and_save(&state, |vault| {
+        vault
+            .add_environment(project_id, name, is_production)
+            .map(|_| ())
+    })
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn remove_environment(
+    state: State<'_, AppState>,
+    project_id: Uuid,
+    env_id: Uuid,
+) -> Result<(), AppError> {
+    mutate_and_save(&state, |vault| vault.remove_environment(project_id, env_id))
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn list_secrets(
+    state: State<'_, AppState>,
+    project_id: Uuid,
+    env_id: Uuid,
+) -> Result<Vec<SecretMeta>, AppError> {
+    read_session(&state, |vault| {
+        let project = vault.project(project_id)?;
+        let env = project
+            .environments
+            .iter()
+            .find(|e| e.id == env_id)
+            .ok_or(envvault_core::CoreError::StaleId)?;
+        Ok(env
+            .secrets
+            .iter()
+            .map(|s| SecretMeta {
+                id: s.id,
+                key: s.key.clone(),
+                note: s.note.clone(),
+                detected_type: s.detected_type,
+                detected_label: s
+                    .detected_type
+                    .map(|t| envvault_core::detect::label(t).to_string()),
+                created_at: s.created_at,
+                rotated_at: s.rotated_at,
+                value_length: s.value.len() as u32,
+            })
+            .collect())
+    })
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn add_secret(
+    state: State<'_, AppState>,
+    project_id: Uuid,
+    env_id: Uuid,
+    key: String,
+    value: String,
+    note: Option<String>,
+) -> Result<(), AppError> {
+    let value = SecretValue::new(value);
+    mutate_and_save(&state, |vault| {
+        vault
+            .add_secret(project_id, env_id, key, value, note)
+            .map(|_| ())
+    })
+}
+
+/// `value: None` keeps the current value; `note: Some("")` clears the note.
+#[tauri::command]
+#[specta::specta]
+pub fn update_secret(
+    state: State<'_, AppState>,
+    project_id: Uuid,
+    env_id: Uuid,
+    secret_id: Uuid,
+    key: Option<String>,
+    value: Option<String>,
+    note: Option<String>,
+) -> Result<(), AppError> {
+    let update = SecretUpdate {
+        key,
+        value: value.map(SecretValue::new),
+        note: note.map(|n| if n.is_empty() { None } else { Some(n) }),
+    };
+    mutate_and_save(&state, |vault| {
+        vault.update_secret(project_id, env_id, secret_id, update)
+    })
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn remove_secret(
+    state: State<'_, AppState>,
+    project_id: Uuid,
+    env_id: Uuid,
+    secret_id: Uuid,
+) -> Result<(), AppError> {
+    mutate_and_save(&state, |vault| {
+        vault.remove_secret(project_id, env_id, secret_id)
+    })
+}
+
+/// The one deliberate path where plaintext crosses to the UI, for display in
+/// a masked-by-default row the user explicitly revealed. The frontend keeps
+/// it in component-local state only and drops it on hide/navigation/lock.
+#[tauri::command]
+#[specta::specta]
+pub fn reveal_secret(
+    state: State<'_, AppState>,
+    project_id: Uuid,
+    env_id: Uuid,
+    secret_id: Uuid,
+) -> Result<String, AppError> {
+    read_session(&state, |vault| {
+        let project = vault.project(project_id)?;
+        let env = project
+            .environments
+            .iter()
+            .find(|e| e.id == env_id)
+            .ok_or(envvault_core::CoreError::StaleId)?;
+        let secret = env
+            .secrets
+            .iter()
+            .find(|s| s.id == secret_id)
+            .ok_or(envvault_core::CoreError::StaleId)?;
+        Ok(secret.value.expose().to_string())
+    })
+}
+
+/// Copy without the plaintext ever entering JS. Returns the auto-clear delay
+/// so the UI can show an honest countdown.
+#[tauri::command]
+#[specta::specta]
+pub fn copy_secret(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    project_id: Uuid,
+    env_id: Uuid,
+    secret_id: Uuid,
+) -> Result<u32, AppError> {
+    use envvault_core::secrecy::SecretString;
+    let value: SecretString = read_session(&state, |vault| {
+        let project = vault.project(project_id)?;
+        let env = project
+            .environments
+            .iter()
+            .find(|e| e.id == env_id)
+            .ok_or(envvault_core::CoreError::StaleId)?;
+        let secret = env
+            .secrets
+            .iter()
+            .find(|s| s.id == secret_id)
+            .ok_or(envvault_core::CoreError::StaleId)?;
+        Ok(SecretString::from(secret.value.expose().to_string()))
+    })?;
+
+    crate::clipboard::copy_with_auto_clear(app, &state, value)?;
+    Ok(crate::clipboard::CLEAR_AFTER_SECONDS)
+}

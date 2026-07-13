@@ -3,5 +3,9 @@
   "identifier": "default",
   "description": "Core capability for the main window. Permissions are added per feature — never wildcard.",
   "windows": ["main"],
-  "permissions": ["core:default", "clipboard-manager:allow-write-text"]
+  "permissions": [
+    "core:default",
+    "clipboard-manager:allow-write-text",
+    "dialog:allow-open"
+  ]
 }

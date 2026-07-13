@@ -7,6 +7,7 @@
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod clipboard;
 mod commands;
 mod error;
 mod events;
@@ -31,6 +32,18 @@ fn specta_builder() -> Builder<tauri::Wry> {
             commands::lock_vault,
             commands::rekey,
             commands::touch_activity,
+            commands::list_projects,
+            commands::add_project,
+            commands::rename_project,
+            commands::remove_project,
+            commands::add_environment,
+            commands::remove_environment,
+            commands::list_secrets,
+            commands::add_secret,
+            commands::update_secret,
+            commands::remove_secret,
+            commands::reveal_secret,
+            commands::copy_secret,
         ])
         .events(collect_events![events::VaultLockedEvent])
         .error_handling(ErrorHandlingMode::Result)
@@ -62,6 +75,7 @@ fn main() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_clipboard_manager::init())
+        .plugin(tauri_plugin_dialog::init())
         .manage(AppState::new())
         .invoke_handler(specta.invoke_handler())
         .setup(move |app| {

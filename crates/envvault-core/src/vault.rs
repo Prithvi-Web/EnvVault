@@ -37,9 +37,12 @@ use fs2::FileExt;
 use serde::{Deserialize, Serialize};
 use zeroize::Zeroizing;
 
+use uuid::Uuid;
+
 use crate::crypto::{self, CryptoError};
 use crate::error::CoreError;
-use crate::project::Project;
+use crate::project::{Environment, Project};
+use crate::secret::{Secret, SecretValue};
 
 /// Bumped on every payload schema change. `load` upgrades every prior
 /// version in memory via [`migrate_payload`].
@@ -86,6 +89,218 @@ impl Default for Settings {
             auto_lock_minutes: Some(10),
         }
     }
+}
+
+impl Vault {
+    // -----------------------------------------------------------------
+    // CRUD. All mutation goes through these methods so invariants
+    // (unique paths, unique names) hold no matter which frontend calls.
+    // -----------------------------------------------------------------
+
+    pub fn project(&self, id: Uuid) -> Result<&Project, CoreError> {
+        self.projects
+            .iter()
+            .find(|p| p.id == id)
+            .ok_or(CoreError::StaleId)
+    }
+
+    pub fn project_mut(&mut self, id: Uuid) -> Result<&mut Project, CoreError> {
+        self.projects
+            .iter_mut()
+            .find(|p| p.id == id)
+            .ok_or(CoreError::StaleId)
+    }
+
+    pub fn add_project(&mut self, name: String, path: PathBuf) -> Result<Uuid, CoreError> {
+        let name = valid_name(name, "project name")?;
+        if self.projects.iter().any(|p| p.path == path) {
+            return Err(CoreError::DuplicateProjectPath(path));
+        }
+        let project = Project::new(name, path);
+        let id = project.id;
+        self.projects.push(project);
+        Ok(id)
+    }
+
+    pub fn rename_project(&mut self, id: Uuid, name: String) -> Result<(), CoreError> {
+        let name = valid_name(name, "project name")?;
+        self.project_mut(id)?.name = name;
+        Ok(())
+    }
+
+    pub fn remove_project(&mut self, id: Uuid) -> Result<(), CoreError> {
+        let before = self.projects.len();
+        self.projects.retain(|p| p.id != id);
+        if self.projects.len() == before {
+            return Err(CoreError::StaleId);
+        }
+        Ok(())
+    }
+
+    pub fn environment_mut(
+        &mut self,
+        project_id: Uuid,
+        env_id: Uuid,
+    ) -> Result<&mut Environment, CoreError> {
+        self.project_mut(project_id)?
+            .environments
+            .iter_mut()
+            .find(|e| e.id == env_id)
+            .ok_or(CoreError::StaleId)
+    }
+
+    pub fn add_environment(
+        &mut self,
+        project_id: Uuid,
+        name: String,
+        is_production: bool,
+    ) -> Result<Uuid, CoreError> {
+        let name = valid_name(name, "environment name")?;
+        let project = self.project_mut(project_id)?;
+        if project
+            .environments
+            .iter()
+            .any(|e| e.name.eq_ignore_ascii_case(&name))
+        {
+            return Err(CoreError::EnvironmentNameTaken(name));
+        }
+        let env = Environment::new(name, is_production);
+        let id = env.id;
+        project.environments.push(env);
+        Ok(id)
+    }
+
+    pub fn remove_environment(&mut self, project_id: Uuid, env_id: Uuid) -> Result<(), CoreError> {
+        let project = self.project_mut(project_id)?;
+        if project.environments.len() == 1 {
+            return Err(CoreError::InvalidInput(
+                "a project needs at least one environment".into(),
+            ));
+        }
+        let before = project.environments.len();
+        project.environments.retain(|e| e.id != env_id);
+        if project.environments.len() == before {
+            return Err(CoreError::StaleId);
+        }
+        Ok(())
+    }
+
+    pub fn add_secret(
+        &mut self,
+        project_id: Uuid,
+        env_id: Uuid,
+        key: String,
+        value: SecretValue,
+        note: Option<String>,
+    ) -> Result<Uuid, CoreError> {
+        let key = valid_env_key(key)?;
+        let env = self.environment_mut(project_id, env_id)?;
+        if env.secrets.iter().any(|s| s.key == key) {
+            return Err(CoreError::SecretNameTaken(key));
+        }
+        let mut secret = Secret::new(key, value);
+        secret.detected_type = crate::detect::detect(&secret.key, secret.value.expose());
+        secret.note = note.filter(|n| !n.trim().is_empty());
+        let id = secret.id;
+        env.secrets.push(secret);
+        Ok(id)
+    }
+
+    pub fn update_secret(
+        &mut self,
+        project_id: Uuid,
+        env_id: Uuid,
+        secret_id: Uuid,
+        update: SecretUpdate,
+    ) -> Result<(), CoreError> {
+        let new_key = update.key.map(valid_env_key).transpose()?;
+        let env = self.environment_mut(project_id, env_id)?;
+        if let Some(key) = &new_key {
+            if env
+                .secrets
+                .iter()
+                .any(|s| s.key == *key && s.id != secret_id)
+            {
+                return Err(CoreError::SecretNameTaken(key.clone()));
+            }
+        }
+        let secret = env
+            .secrets
+            .iter_mut()
+            .find(|s| s.id == secret_id)
+            .ok_or(CoreError::StaleId)?;
+
+        if let Some(key) = new_key {
+            secret.key = key;
+        }
+        if let Some(value) = update.value {
+            secret.value = value;
+            // A changed value IS a rotation — this drives the health view.
+            secret.rotated_at = chrono::Utc::now();
+        }
+        if let Some(note) = update.note {
+            secret.note = note.filter(|n| !n.trim().is_empty());
+        }
+        secret.detected_type = crate::detect::detect(&secret.key, secret.value.expose());
+        Ok(())
+    }
+
+    pub fn remove_secret(
+        &mut self,
+        project_id: Uuid,
+        env_id: Uuid,
+        secret_id: Uuid,
+    ) -> Result<(), CoreError> {
+        let env = self.environment_mut(project_id, env_id)?;
+        let before = env.secrets.len();
+        env.secrets.retain(|s| s.id != secret_id);
+        if env.secrets.len() == before {
+            return Err(CoreError::StaleId);
+        }
+        Ok(())
+    }
+}
+
+/// Fields to change on a secret. `None` = leave untouched. For `note`,
+/// `Some(None)` clears it.
+#[derive(Debug, Default)]
+pub struct SecretUpdate {
+    pub key: Option<String>,
+    pub value: Option<SecretValue>,
+    pub note: Option<Option<String>>,
+}
+
+fn valid_name(name: String, what: &str) -> Result<String, CoreError> {
+    let trimmed = name.trim().to_string();
+    if trimmed.is_empty() {
+        return Err(CoreError::InvalidInput(format!("{what} cannot be empty")));
+    }
+    Ok(trimmed)
+}
+
+/// Env-var names: what POSIX tools and dotenv parsers actually accept.
+fn valid_env_key(key: String) -> Result<String, CoreError> {
+    let trimmed = key.trim().to_string();
+    if trimmed.is_empty() {
+        return Err(CoreError::InvalidInput(
+            "secret name cannot be empty".into(),
+        ));
+    }
+    let mut chars = trimmed.chars();
+    let first_ok = chars
+        .next()
+        .is_some_and(|c| c.is_ascii_alphabetic() || c == '_');
+    if !first_ok
+        || !trimmed
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_')
+    {
+        return Err(CoreError::InvalidInput(
+            "secret names use letters, digits and underscores, and cannot start with a digit"
+                .into(),
+        ));
+    }
+    Ok(trimmed)
 }
 
 /// The plaintext-JSON envelope stored on disk. Everything sensitive inside

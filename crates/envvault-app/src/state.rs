@@ -1,7 +1,8 @@
 //! In-process session state. The unlocked vault lives here and nowhere else;
 //! locking means dropping it (every secret zeroizes on drop, per core).
 
-use std::sync::{Mutex, MutexGuard};
+use std::sync::atomic::AtomicU64;
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Instant;
 
 use envvault_core::vault::UnlockedVault;
@@ -10,6 +11,9 @@ pub struct AppState {
     session: Mutex<Option<UnlockedVault>>,
     last_activity: Mutex<Instant>,
     auto_lock_minutes: Mutex<Option<u32>>,
+    /// Bumped on every secret copy; lets a stale auto-clear timer detect that
+    /// a newer copy owns the clipboard. Arc so timer threads can hold it.
+    pub clipboard_generation: Arc<AtomicU64>,
 }
 
 /// A poisoned mutex means another thread panicked while holding it. For a
@@ -25,6 +29,7 @@ impl AppState {
             session: Mutex::new(None),
             last_activity: Mutex::new(Instant::now()),
             auto_lock_minutes: Mutex::new(None),
+            clipboard_generation: Arc::new(AtomicU64::new(0)),
         }
     }
 

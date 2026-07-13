@@ -35,6 +35,18 @@ pub enum CoreError {
     #[error("a secret named {0} already exists in this environment")]
     SecretNameTaken(String),
 
+    #[error("an environment named {0} already exists in this project")]
+    EnvironmentNameTaken(String),
+
+    #[error("this project folder is already registered: {0}")]
+    DuplicateProjectPath(PathBuf),
+
+    #[error("{0}")]
+    InvalidInput(String),
+
+    #[error("that item no longer exists — it may have been removed elsewhere")]
+    StaleId,
+
     #[error("could not determine the OS application-data directory")]
     NoDataDir,
 

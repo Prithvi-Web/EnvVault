@@ -15,6 +15,12 @@ serde_json.workspace = true
 thiserror.workspace = true
 uuid.workspace = true
 zeroize.workspace = true
+# Optional, app-only: lets the Tauri app export core enums (KeyType) into the
+# generated TypeScript bindings. The CLI never enables this; core stays pure.
+specta = { version = "=2.0.0-rc.25", optional = true, features = ["derive"] }
+
+[features]
+specta = ["dep:specta"]
 
 [dev-dependencies]
 tempfile = "3"

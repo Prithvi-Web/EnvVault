@@ -9,11 +9,22 @@ description = "EnvVault desktop app (Tauri shell). Thin command layer — all lo
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-envvault-core.workspace = true
+envvault-core = { workspace = true, features = ["specta"] }
 serde.workspace = true
 serde_json.workspace = true
 tauri = { version = "2", features = ["macos-private-api"] }
 tauri-plugin-clipboard-manager = "2"
+tauri-plugin-dialog = "2"
+uuid.workspace = true
+chrono.workspace = true
+
+# macOS: secrets are written to NSPasteboard with the ConcealedType marker so
+# clipboard managers do not archive them (spec §4.6). Other platforms use the
+# clipboard plugin's Rust API.
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+objc2-app-kit = { version = "0.3", features = ["NSPasteboard"] }
+objc2-foundation = "0.3"
 specta = { version = "=2.0.0-rc.25", features = ["derive", "uuid", "chrono"] }
 tauri-specta = { version = "=2.0.0-rc.25", features = ["derive", "typescript"] }
 specta-typescript = "0.0.12"
