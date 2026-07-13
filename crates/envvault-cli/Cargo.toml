@@ -11,3 +11,15 @@ path = "src/main.rs"
 
 [dependencies]
 envvault-core.workspace = true
+clap = { version = "4", features = ["derive", "wrap_help"] }
+rpassword = "7"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+signal-hook = "0.3"
+
+[dev-dependencies]
+tempfile = "3"
+
+[target.'cfg(unix)'.dev-dependencies]
+libc = "0.2"

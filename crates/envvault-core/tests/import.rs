@@ -8,11 +8,10 @@ use std::process::Command;
 
 use envvault_core::envfile;
 use envvault_core::scanner::{
-    self, cleanup_old_backups, ensure_gitignored, find_env_files, git_history_exposure,
+    cleanup_old_backups, ensure_gitignored, find_env_files, git_history_exposure,
     import_and_secure, is_secret_env_file, secure_remove_with_backup, write_env_example,
     ImportOptions,
 };
-use envvault_core::secrecy::SecretString;
 use envvault_core::vault::Vault;
 use proptest::prelude::*;
 

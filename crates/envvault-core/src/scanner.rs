@@ -4,7 +4,7 @@
 //! git2 is built with default-features off: no network transports exist in
 //! this binary, so none of this can ever fetch or push.
 
-use std::fs::{self, File, OpenOptions};
+use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
