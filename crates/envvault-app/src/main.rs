@@ -11,6 +11,7 @@ mod clipboard;
 mod commands;
 mod error;
 mod events;
+mod guard;
 mod state;
 
 use std::time::Duration;
@@ -18,6 +19,7 @@ use std::time::Duration;
 use tauri::Manager;
 use tauri_specta::{collect_commands, collect_events, Builder, ErrorHandlingMode, Event};
 
+use guard::GuardManager;
 use state::AppState;
 
 /// Single source of truth for the IPC surface. Used both by `main` to build
@@ -47,8 +49,14 @@ fn specta_builder() -> Builder<tauri::Wry> {
             commands::scan_env_files,
             commands::preview_env_import,
             commands::import_env,
+            commands::guard_status,
+            commands::set_guard_enabled,
+            commands::set_project_guard_enabled,
         ])
-        .events(collect_events![events::VaultLockedEvent])
+        .events(collect_events![
+            events::VaultLockedEvent,
+            events::GuardFindingEvent
+        ])
         .error_handling(ErrorHandlingMode::Result)
 }
 
@@ -79,7 +87,9 @@ fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_notification::init())
         .manage(AppState::new())
+        .manage(GuardManager::new())
         .invoke_handler(specta.invoke_handler())
         .setup(move |app| {
             specta.mount_events(app);

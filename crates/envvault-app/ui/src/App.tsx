@@ -12,6 +12,7 @@ export default function App() {
   const status = useVault((s) => s.status);
   const refresh = useVault((s) => s.refresh);
   const markLocked = useVault((s) => s.markLocked);
+  const setGuardFinding = useVault((s) => s.setGuardFinding);
   const lastTouch = useRef(0);
 
   useEffect(() => {
@@ -19,6 +20,11 @@ export default function App() {
 
     // Rust locked the vault (idle timeout): drop everything, show the lock.
     const unlisten = events.vaultLockedEvent.listen(() => markLocked());
+
+    // The Guard caught a dangerous change: surface an in-app banner.
+    const unlistenGuard = events.guardFindingEvent.listen((e) =>
+      setGuardFinding(e.payload),
+    );
 
     // ⌘L / Ctrl+L locks instantly, from anywhere.
     function onKeyDown(e: KeyboardEvent) {
@@ -45,11 +51,12 @@ export default function App() {
     window.addEventListener("pointermove", touch);
     return () => {
       void unlisten.then((fn) => fn());
+      void unlistenGuard.then((fn) => fn());
       window.removeEventListener("keydown", onKeyDown);
       window.removeEventListener("pointerdown", touch);
       window.removeEventListener("pointermove", touch);
     };
-  }, [refresh, markLocked]);
+  }, [refresh, markLocked, setGuardFinding]);
 
   return (
     <div className="app-shell">

@@ -13,6 +13,8 @@ fs2.workspace = true
 # Local repository reading only (history scan, ignore checks). Network
 # transports disabled: this build of git2 cannot fetch, ever.
 git2 = { version = "0.20", default-features = false }
+notify.workspace = true
+notify-debouncer-full.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true

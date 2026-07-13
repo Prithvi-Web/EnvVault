@@ -80,6 +80,14 @@ impl Default for Vault {
 pub struct Settings {
     /// Auto-lock timeout in minutes. `None` means "Never" (UI shows a warning).
     pub auto_lock_minutes: Option<u32>,
+    /// Global Guard switch (spec F6). `serde(default)` = existing vaults get
+    /// the Guard on without a migration.
+    #[serde(default = "default_true")]
+    pub guard_enabled: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 impl Default for Settings {
@@ -87,6 +95,7 @@ impl Default for Settings {
         // Spec §4.3: default auto-lock is 10 minutes of inactivity.
         Self {
             auto_lock_minutes: Some(10),
+            guard_enabled: true,
         }
     }
 }

@@ -3,7 +3,15 @@
 // keyboard: ⌘K palette, N new secret, / search, ⌘L lock.
 
 import { useEffect, useRef, useState } from "react";
-import { FileWarning, KeyRound, LockOpen, Plus, Search } from "lucide-react";
+import {
+  FileWarning,
+  KeyRound,
+  LockOpen,
+  Plus,
+  Search,
+  Shield,
+  ShieldOff,
+} from "lucide-react";
 import {
   commands,
   type EnvFileCandidate,
@@ -22,6 +30,7 @@ import { EnvTabs } from "./home/EnvTabs";
 import { SecretsTable } from "./home/SecretsTable";
 import { SecretDialog, type SecretDialogMode } from "./home/SecretDialog";
 import { ImportDialog } from "./home/ImportDialog";
+import { GuardBanner } from "./home/GuardBanner";
 import { AddProjectDialog } from "./home/AddProjectDialog";
 import { AddEnvDialog } from "./home/AddEnvDialog";
 import { CommandPalette } from "./home/CommandPalette";
@@ -32,6 +41,9 @@ export default function Home() {
   const project = useSelectedProject();
   const selectedEnvId = useVault((s) => s.selectedEnvId);
   const loadSecrets = useVault((s) => s.loadSecrets);
+  const guardFinding = useVault((s) => s.guardFinding);
+  const setGuardFinding = useVault((s) => s.setGuardFinding);
+  const selectProject = useVault((s) => s.selectProject);
   const push = useToasts((s) => s.push);
 
   const env = project?.environments.find((e) => e.id === selectedEnvId) ?? null;
@@ -46,7 +58,24 @@ export default function Home() {
   const [deleteEnv, setDeleteEnv] = useState<EnvironmentSummary | null>(null);
   const [envFiles, setEnvFiles] = useState<EnvFileCandidate[]>([]);
   const [importFiles, setImportFiles] = useState<EnvFileCandidate[] | null>(null);
+  const [guardEnabled, setGuardEnabled] = useState(true);
   const searchRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    void commands.guardStatus().then((r) => {
+      if (r.status === "ok") setGuardEnabled(r.data.enabled);
+    });
+  }, []);
+
+  async function toggleGuard() {
+    const next = !guardEnabled;
+    setGuardEnabled(next);
+    const r = await commands.setGuardEnabled(next);
+    if (r.status === "error") {
+      setGuardEnabled(!next); // revert on failure
+      push(describeError(r.error));
+    }
+  }
 
   useEffect(() => {
     void loadProjects();
@@ -158,6 +187,23 @@ export default function Home() {
               ? `Auto-locks after ${autoLockMinutes} min idle`
               : "Auto-lock is off"}
           </span>
+          <button
+            className="status-pill"
+            title={
+              guardEnabled
+                ? "The Guard is watching your projects for leaked secrets. Click to turn off."
+                : "The Guard is off. Click to turn on."
+            }
+            onClick={() => void toggleGuard()}
+            style={guardEnabled ? undefined : { opacity: 0.6 }}
+          >
+            {guardEnabled ? (
+              <Shield size={12} color="var(--ok)" />
+            ) : (
+              <ShieldOff size={12} color="var(--text-faint)" />
+            )}
+            Guard {guardEnabled ? "on" : "off"}
+          </button>
           <Button variant="ghost" onClick={() => setPaletteOpen(true)}>
             Commands
             <kbd>⌘K</kbd>
@@ -178,6 +224,28 @@ export default function Home() {
 
         <main className="flex min-w-0 flex-1 flex-col overflow-y-auto px-6 py-4">
           {viaRecovery && <RekeyBanner onDone={() => void refresh()} />}
+
+          {guardFinding && (
+            <GuardBanner
+              finding={guardFinding}
+              onSecure={
+                guardFinding.kind === "env-appeared"
+                  ? () => {
+                      // Jump to the flagged project, then open Import & Secure
+                      // directly on the file the Guard named.
+                      if (guardFinding.projectId !== project?.id) {
+                        selectProject(guardFinding.projectId);
+                      }
+                      setImportFiles([
+                        { path: guardFinding.path, fileName: guardFinding.fileName },
+                      ]);
+                      setGuardFinding(null);
+                    }
+                  : null
+              }
+              onDismiss={() => setGuardFinding(null)}
+            />
+          )}
 
           {!project ? (
             <EmptyVault onAddProject={() => setAddProjectOpen(true)} />

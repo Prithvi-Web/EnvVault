@@ -3,7 +3,12 @@
 // for exactly as long as they are on screen. Locking clears everything.
 
 import { create } from "zustand";
-import { commands, type ProjectSummary, type SecretMeta } from "./bindings";
+import {
+  commands,
+  type GuardFindingEvent,
+  type ProjectSummary,
+  type SecretMeta,
+} from "./bindings";
 
 export type VaultUiStatus = "loading" | "no-vault" | "locked" | "unlocked";
 
@@ -18,6 +23,10 @@ interface VaultStore {
   selectedProjectId: string | null;
   selectedEnvId: string | null;
   secrets: SecretMeta[];
+
+  /** The most recent Guard finding, shown as a dismissible banner. */
+  guardFinding: GuardFindingEvent | null;
+  setGuardFinding: (f: GuardFindingEvent | null) => void;
 
   refresh: () => Promise<void>;
   markLocked: () => void;
@@ -40,6 +49,9 @@ export const useVault = create<VaultStore>((set, get) => ({
   selectedProjectId: null,
   selectedEnvId: null,
   secrets: [],
+  guardFinding: null,
+
+  setGuardFinding: (f) => set({ guardFinding: f }),
 
   refresh: async () => {
     const result = await commands.vaultStatus();
@@ -64,6 +76,7 @@ export const useVault = create<VaultStore>((set, get) => ({
       selectedProjectId: null,
       selectedEnvId: null,
       secrets: [],
+      guardFinding: null,
     }),
 
   // Optimistic transition, then reconcile details (auto-lock setting, path)

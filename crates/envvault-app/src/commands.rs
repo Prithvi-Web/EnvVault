@@ -59,6 +59,7 @@ pub fn vault_status(state: State<'_, AppState>) -> Result<VaultStatus, AppError>
 #[tauri::command]
 #[specta::specta]
 pub async fn create_vault(
+    _app: tauri::AppHandle,
     state: State<'_, AppState>,
     password: String,
     generate_recovery_key: bool,
@@ -84,6 +85,7 @@ pub async fn create_vault(
 #[tauri::command]
 #[specta::specta]
 pub async fn unlock(
+    app: tauri::AppHandle,
     state: State<'_, AppState>,
     passphrase: String,
 ) -> Result<UnlockOutcome, AppError> {
@@ -98,6 +100,7 @@ pub async fn unlock(
 
     let via_recovery = unlocked.via_recovery;
     state.set_session(unlocked);
+    crate::guard::resync(&app); // arm the Guard for this session's projects
 
     Ok(UnlockOutcome { via_recovery })
 }
@@ -169,6 +172,7 @@ pub struct ProjectSummary {
     pub path: String,
     pub created_at: DateTime<Utc>,
     pub environments: Vec<EnvironmentSummary>,
+    pub guard_enabled: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Type)]
@@ -190,6 +194,7 @@ fn project_summary(p: &envvault_core::project::Project) -> ProjectSummary {
         name: p.name.clone(),
         path: p.path.display().to_string(),
         created_at: p.created_at,
+        guard_enabled: p.guard_enabled,
         environments: p
             .environments
             .iter()
@@ -250,12 +255,15 @@ pub fn list_projects(state: State<'_, AppState>) -> Result<Vec<ProjectSummary>, 
 #[tauri::command]
 #[specta::specta]
 pub fn add_project(
+    app: tauri::AppHandle,
     state: State<'_, AppState>,
     name: String,
     path: String,
 ) -> Result<ProjectSummary, AppError> {
     let id = mutate_and_save(&state, |vault| vault.add_project(name, path.into()))?;
-    read_session(&state, move |vault| Ok(project_summary(vault.project(id)?)))
+    let summary = read_session(&state, move |vault| Ok(project_summary(vault.project(id)?)))?;
+    crate::guard::resync(&app); // start watching the new project
+    Ok(summary)
 }
 
 #[tauri::command]
@@ -677,4 +685,63 @@ pub fn copy_secret(
 
     crate::clipboard::copy_with_auto_clear(app, &state, value)?;
     Ok(crate::clipboard::CLEAR_AFTER_SECONDS)
+}
+
+// ---------------------------------------------------------------------------
+// Phase 6: the Guard (spec F6)
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct GuardStatus {
+    /// Global switch.
+    pub enabled: bool,
+    /// How many project directories are actively watched right now.
+    pub watched_count: u32,
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn guard_status(
+    state: State<'_, AppState>,
+    guard_mgr: State<'_, crate::guard::GuardManager>,
+) -> Result<GuardStatus, AppError> {
+    let enabled = read_session(&state, |vault| Ok(vault.settings.guard_enabled))?;
+    Ok(GuardStatus {
+        enabled,
+        watched_count: guard_mgr.watched_count(),
+    })
+}
+
+/// Flip the global Guard switch and re-sync watchers immediately.
+#[tauri::command]
+#[specta::specta]
+pub fn set_guard_enabled(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    enabled: bool,
+) -> Result<(), AppError> {
+    mutate_and_save(&state, |vault| {
+        vault.settings.guard_enabled = enabled;
+        Ok(())
+    })?;
+    crate::guard::resync(&app);
+    Ok(())
+}
+
+/// Flip a single project's Guard switch and re-sync.
+#[tauri::command]
+#[specta::specta]
+pub fn set_project_guard_enabled(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    project_id: Uuid,
+    enabled: bool,
+) -> Result<(), AppError> {
+    mutate_and_save(&state, |vault| {
+        vault.project_mut(project_id)?.guard_enabled = enabled;
+        Ok(())
+    })?;
+    crate::guard::resync(&app);
+    Ok(())
 }

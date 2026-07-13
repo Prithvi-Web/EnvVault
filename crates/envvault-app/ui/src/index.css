@@ -337,6 +337,19 @@ body.plat-linux .titlebar {
   border-radius: 999px;
 }
 
+button.status-pill {
+  cursor: default;
+  transition:
+    background 100ms ease,
+    border-color 100ms ease;
+}
+
+button.status-pill:hover {
+  background: var(--panel-strong);
+  border-color: var(--hairline-strong);
+  color: var(--text);
+}
+
 /* ------------------------------------------------------------------ */
 /* Main layout: sidebar, env tabs, secret rows                         */
 /* ------------------------------------------------------------------ */

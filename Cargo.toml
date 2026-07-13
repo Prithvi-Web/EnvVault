@@ -24,6 +24,8 @@ zeroize = { version = "1", features = ["derive"] }
 age = { version = "0.12", features = ["armor"] }
 dirs = "6"
 fs2 = "0.4"
+notify = "8"
+notify-debouncer-full = "0.5"
 
 [profile.release]
 lto = true

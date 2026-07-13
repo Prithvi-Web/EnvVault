@@ -17,6 +17,7 @@ pub mod crypto;
 pub mod detect;
 pub mod envfile;
 pub mod error;
+pub mod guard;
 pub mod health;
 pub mod project;
 pub mod ratelimit;

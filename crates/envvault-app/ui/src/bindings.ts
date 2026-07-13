@@ -60,10 +60,16 @@ export const commands = {
 	 *  concrete rotation instructions.
 	 */
 	importEnv: (projectId: string, envId: string, path: string) => typedError<ImportResult, AppError>(__TAURI_INVOKE("import_env", { projectId, envId, path })),
+	guardStatus: () => typedError<GuardStatus, AppError>(__TAURI_INVOKE("guard_status")),
+	/**  Flip the global Guard switch and re-sync watchers immediately. */
+	setGuardEnabled: (enabled: boolean) => typedError<null, AppError>(__TAURI_INVOKE("set_guard_enabled", { enabled })),
+	/**  Flip a single project's Guard switch and re-sync. */
+	setProjectGuardEnabled: (projectId: string, enabled: boolean) => typedError<null, AppError>(__TAURI_INVOKE("set_project_guard_enabled", { projectId, enabled })),
 };
 
 /** Events */
 export const events = {
+	guardFindingEvent: makeEvent<GuardFindingEvent>("guard-finding-event"),
 	vaultLockedEvent: makeEvent<VaultLockedEvent>("vault-locked-event"),
 };
 
@@ -121,6 +127,27 @@ export type ExposureInfo = {
 	lastCommit: string | null,
 };
 
+/**
+ *  Emitted when the Guard catches a dangerous change (spec F6). The UI shows
+ *  an in-app banner with a one-click fix in addition to the OS notification.
+ */
+export type GuardFindingEvent = {
+	/**  "env-appeared" | "secret-in-file" | "gitignore-exposed" */
+	kind: string,
+	projectId: string,
+	path: string,
+	fileName: string,
+	/**  Populated for the "secret-in-file" kind. */
+	secretKeys: string[],
+};
+
+export type GuardStatus = {
+	/**  Global switch. */
+	enabled: boolean,
+	/**  How many project directories are actively watched right now. */
+	watchedCount: number,
+};
+
 export type ImportPreview = {
 	fileName: string,
 	entries: ImportPreviewEntry[],
@@ -160,6 +187,7 @@ export type ProjectSummary = {
 	path: string,
 	createdAt: string,
 	environments: EnvironmentSummary[],
+	guardEnabled: boolean,
 };
 
 export type RotationAdvice = {

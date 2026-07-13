@@ -17,6 +17,14 @@ pub struct Project {
     pub path: PathBuf,
     pub environments: Vec<Environment>,
     pub created_at: DateTime<Utc>,
+    /// Per-project Guard switch (spec F6). `serde(default)` keeps old vaults
+    /// readable with the Guard on.
+    #[serde(default = "guard_default")]
+    pub guard_enabled: bool,
+}
+
+fn guard_default() -> bool {
+    true
 }
 
 impl Project {
@@ -33,6 +41,7 @@ impl Project {
                 Environment::new("production".into(), true),
             ],
             created_at: Utc::now(),
+            guard_enabled: true,
         }
     }
 }

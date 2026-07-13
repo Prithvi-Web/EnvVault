@@ -29,6 +29,7 @@ const project: ProjectSummary = {
   name: "acme",
   path: "/tmp/acme",
   createdAt: "2026-07-13T00:00:00Z",
+  guardEnabled: true,
   environments: [
     { id: "e1", name: "development", isProduction: false, secretCount: 1 },
   ],
