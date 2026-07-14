@@ -237,7 +237,12 @@ fn changes_in_ignored_dirs_are_not_reported() {
 }
 
 #[test]
-fn idle_watcher_reports_nothing() {
+fn idle_watcher_is_quiet_in_steady_state() {
+    // Backs the "< 0.1% idle CPU" claim: once established, a watcher over an
+    // unchanging directory emits nothing. macOS FSEvents can flush a one-time
+    // startup event for the freshly-created watch root, so we drain any such
+    // startup noise first, then assert the steady state is silent. (A
+    // spinning/looping watcher would keep emitting and fail this.)
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path().to_path_buf();
     let pid = Uuid::new_v4();
@@ -249,8 +254,17 @@ fn idle_watcher_reports_nothing() {
     .unwrap();
     g.watch(pid, root).unwrap();
 
-    // Nothing changes: no events for a full second.
-    assert!(rx.recv_timeout(Duration::from_millis(1200)).is_err());
+    // Settle: drain whatever startup events arrive in the first ~1.5s.
+    let settle_end = Instant::now() + Duration::from_millis(1500);
+    while Instant::now() < settle_end {
+        let _ = rx.recv_timeout(Duration::from_millis(200));
+    }
+
+    // Steady state: nothing changes on disk, so nothing should arrive.
+    assert!(
+        rx.recv_timeout(Duration::from_millis(1500)).is_err(),
+        "an idle watcher must be silent once established"
+    );
 }
 
 fn git(dir: &Path, args: &[&str]) {
