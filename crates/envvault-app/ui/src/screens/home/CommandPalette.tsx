@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
+  Activity,
   FolderPlus,
   FolderLock,
   KeySquare,
@@ -27,6 +28,7 @@ interface CommandPaletteProps {
   onNewSecret: () => void;
   onAddProject: () => void;
   onAddEnv: () => void;
+  onShowHealth: () => void;
 }
 
 export function CommandPalette({
@@ -36,6 +38,7 @@ export function CommandPalette({
   onNewSecret,
   onAddProject,
   onAddEnv,
+  onShowHealth,
 }: CommandPaletteProps) {
   const projects = useVault((s) => s.projects);
   const selectProject = useVault((s) => s.selectProject);
@@ -58,6 +61,7 @@ export function CommandPalette({
   const actions = useMemo<PaletteAction[]>(() => {
     const list: PaletteAction[] = [
       { id: "new-secret", label: "New secret", hint: "N", icon: Plus, run: onNewSecret },
+      { id: "health", label: "Secret health", icon: Activity, run: onShowHealth },
       { id: "add-project", label: "Add project", icon: FolderPlus, run: onAddProject },
       { id: "add-env", label: "Add environment", icon: Layers, run: onAddEnv },
       { id: "lock", label: "Lock vault", hint: "⌘L", icon: Lock, run: onLock },
@@ -80,7 +84,17 @@ export function CommandPalette({
       });
     }
     return list;
-  }, [projects, project, onLock, onNewSecret, onAddProject, onAddEnv, selectEnv, selectProject]);
+  }, [
+    projects,
+    project,
+    onLock,
+    onNewSecret,
+    onAddProject,
+    onAddEnv,
+    onShowHealth,
+    selectEnv,
+    selectProject,
+  ]);
 
   const filtered = actions.filter((a) =>
     a.label.toLowerCase().includes(query.trim().toLowerCase()),

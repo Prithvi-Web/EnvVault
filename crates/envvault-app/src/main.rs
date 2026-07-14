@@ -52,6 +52,7 @@ fn specta_builder() -> Builder<tauri::Wry> {
             commands::guard_status,
             commands::set_guard_enabled,
             commands::set_project_guard_enabled,
+            commands::health_report,
         ])
         .events(collect_events![
             events::VaultLockedEvent,

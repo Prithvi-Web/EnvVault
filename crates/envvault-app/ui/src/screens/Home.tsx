@@ -4,6 +4,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import {
+  Activity,
   FileWarning,
   KeyRound,
   LockOpen,
@@ -31,6 +32,7 @@ import { SecretsTable } from "./home/SecretsTable";
 import { SecretDialog, type SecretDialogMode } from "./home/SecretDialog";
 import { ImportDialog } from "./home/ImportDialog";
 import { GuardBanner } from "./home/GuardBanner";
+import { HealthDashboard } from "./home/HealthDashboard";
 import { AddProjectDialog } from "./home/AddProjectDialog";
 import { AddEnvDialog } from "./home/AddEnvDialog";
 import { CommandPalette } from "./home/CommandPalette";
@@ -59,6 +61,7 @@ export default function Home() {
   const [envFiles, setEnvFiles] = useState<EnvFileCandidate[]>([]);
   const [importFiles, setImportFiles] = useState<EnvFileCandidate[] | null>(null);
   const [guardEnabled, setGuardEnabled] = useState(true);
+  const [view, setView] = useState<"secrets" | "health">("secrets");
   const searchRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -204,6 +207,18 @@ export default function Home() {
             )}
             Guard {guardEnabled ? "on" : "off"}
           </button>
+          <Button
+            variant="ghost"
+            onClick={() => setView((v) => (v === "health" ? "secrets" : "health"))}
+            style={
+              view === "health"
+                ? { background: "var(--panel-strong)", borderColor: "var(--hairline-strong)" }
+                : undefined
+            }
+          >
+            <Activity size={14} />
+            Health
+          </Button>
           <Button variant="ghost" onClick={() => setPaletteOpen(true)}>
             Commands
             <kbd>⌘K</kbd>
@@ -247,7 +262,9 @@ export default function Home() {
             />
           )}
 
-          {!project ? (
+          {view === "health" ? (
+            <HealthDashboard />
+          ) : !project ? (
             <EmptyVault onAddProject={() => setAddProjectOpen(true)} />
           ) : (
             <>
@@ -348,6 +365,7 @@ export default function Home() {
         onNewSecret={() => setSecretDialog({ mode: "new" })}
         onAddProject={() => setAddProjectOpen(true)}
         onAddEnv={() => setAddEnvOpen(true)}
+        onShowHealth={() => setView("health")}
       />
 
       <ConfirmDialog

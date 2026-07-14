@@ -65,6 +65,11 @@ export const commands = {
 	setGuardEnabled: (enabled: boolean) => typedError<null, AppError>(__TAURI_INVOKE("set_guard_enabled", { enabled })),
 	/**  Flip a single project's Guard switch and re-sync. */
 	setProjectGuardEnabled: (projectId: string, enabled: boolean) => typedError<null, AppError>(__TAURI_INVOKE("set_project_guard_enabled", { projectId, enabled })),
+	/**
+	 *  Analyze every secret in the (unlocked) vault. No secret values ever cross
+	 *  the boundary — only names and finding metadata.
+	 */
+	healthReport: () => typedError<HealthReport, AppError>(__TAURI_INVOKE("health_report")),
 };
 
 /** Events */
@@ -146,6 +151,34 @@ export type GuardStatus = {
 	enabled: boolean,
 	/**  How many project directories are actively watched right now. */
 	watchedCount: number,
+};
+
+export type HealthFinding = {
+	/**  "stale" | "reused" | "weak" | "exposed" */
+	category: string,
+	/**  "critical" | "warning" | "info" */
+	severity: string,
+	title: string,
+	fix: string,
+	fixUrl: string,
+	locations: HealthLocation[],
+};
+
+export type HealthLocation = {
+	projectId: string,
+	projectName: string,
+	environmentId: string,
+	environmentName: string,
+	isProduction: boolean,
+	secretId: string,
+	secretKey: string,
+};
+
+export type HealthReport = {
+	findings: HealthFinding[],
+	totalSecrets: number,
+	criticalCount: number,
+	warningCount: number,
 };
 
 export type ImportPreview = {

@@ -745,3 +745,110 @@ pub fn set_project_guard_enabled(
     crate::guard::resync(&app);
     Ok(())
 }
+
+// ---------------------------------------------------------------------------
+// Phase 7: the health dashboard (spec F7)
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct HealthLocation {
+    pub project_id: Uuid,
+    pub project_name: String,
+    pub environment_id: Uuid,
+    pub environment_name: String,
+    pub is_production: bool,
+    pub secret_id: Uuid,
+    pub secret_key: String,
+}
+
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct HealthFinding {
+    /// "stale" | "reused" | "weak" | "exposed"
+    pub category: String,
+    /// "critical" | "warning" | "info"
+    pub severity: String,
+    pub title: String,
+    pub fix: String,
+    pub fix_url: String,
+    pub locations: Vec<HealthLocation>,
+}
+
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct HealthReport {
+    pub findings: Vec<HealthFinding>,
+    pub total_secrets: u32,
+    pub critical_count: u32,
+    pub warning_count: u32,
+}
+
+/// Analyze every secret in the (unlocked) vault. No secret values ever cross
+/// the boundary — only names and finding metadata.
+#[tauri::command]
+#[specta::specta]
+pub fn health_report(state: State<'_, AppState>) -> Result<HealthReport, AppError> {
+    use envvault_core::health::{self, FindingKind, Severity};
+
+    read_session(&state, |vault| {
+        let findings = health::analyze(vault);
+        let total_secrets = vault
+            .projects
+            .iter()
+            .flat_map(|p| &p.environments)
+            .map(|e| e.secrets.len())
+            .sum::<usize>() as u32;
+
+        let mut critical = 0u32;
+        let mut warning = 0u32;
+        let dto: Vec<HealthFinding> = findings
+            .into_iter()
+            .map(|f| {
+                match f.severity {
+                    Severity::Critical => critical += 1,
+                    Severity::Warning => warning += 1,
+                    Severity::Info => {}
+                }
+                HealthFinding {
+                    category: match f.kind {
+                        FindingKind::Stale { .. } => "stale",
+                        FindingKind::Reused => "reused",
+                        FindingKind::Weak { .. } => "weak",
+                        FindingKind::Exposed { .. } => "exposed",
+                    }
+                    .to_string(),
+                    severity: match f.severity {
+                        Severity::Critical => "critical",
+                        Severity::Warning => "warning",
+                        Severity::Info => "info",
+                    }
+                    .to_string(),
+                    title: f.title,
+                    fix: f.fix,
+                    fix_url: f.fix_url,
+                    locations: f
+                        .locations
+                        .into_iter()
+                        .map(|l| HealthLocation {
+                            project_id: l.project_id,
+                            project_name: l.project_name,
+                            environment_id: l.environment_id,
+                            environment_name: l.environment_name,
+                            is_production: l.is_production,
+                            secret_id: l.secret_id,
+                            secret_key: l.secret_key,
+                        })
+                        .collect(),
+                }
+            })
+            .collect();
+
+        Ok(HealthReport {
+            findings: dto,
+            total_secrets,
+            critical_count: critical,
+            warning_count: warning,
+        })
+    })
+}
