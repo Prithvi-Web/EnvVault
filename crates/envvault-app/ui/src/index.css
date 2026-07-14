@@ -1,29 +1,62 @@
 @import "tailwindcss";
 
 /* ------------------------------------------------------------------ */
-/* EnvVault design tokens — liquid glass over native vibrancy.        */
-/* The window itself is transparent; macOS/Windows blur the desktop   */
-/* behind it. Everything in-app sits on translucent panels with       */
-/* hairline borders and one specular top edge.                        */
+/* EnvVault — Apple "Liquid Glass" over native window vibrancy.        */
+/* The window itself is transparent; macOS/Windows blur the desktop    */
+/* behind it. Floating surfaces are real glass: they blur + saturate   */
+/* what sits behind them, carry a specular top edge, and cast soft     */
+/* layered depth. Restrained, not iridescent — this is a tool.         */
 /* ------------------------------------------------------------------ */
 
 :root {
-  --bg-tint: rgba(13, 15, 22, 0.55);
+  --bg-tint: rgba(12, 14, 20, 0.5);
   --bg-solid: #0d0f16;
-  --panel: rgba(255, 255, 255, 0.045);
-  --panel-strong: rgba(255, 255, 255, 0.08);
-  --field: rgba(0, 0, 0, 0.28);
-  --hairline: rgba(255, 255, 255, 0.09);
-  --hairline-strong: rgba(255, 255, 255, 0.18);
-  --text: #eceff7;
+
+  /* Panel fills (used without backdrop-filter on dense list surfaces) */
+  --panel: rgba(255, 255, 255, 0.05);
+  --panel-strong: rgba(255, 255, 255, 0.09);
+  --field: rgba(0, 0, 0, 0.26);
+
+  --hairline: rgba(255, 255, 255, 0.1);
+  --hairline-strong: rgba(255, 255, 255, 0.2);
+
+  --text: #eef1f8;
   --text-dim: #9aa1b6;
-  --text-faint: #666e85;
-  --accent: #7a8cff;
-  --accent-soft: rgba(122, 140, 255, 0.16);
+  --text-faint: #697086;
+
+  --accent: #7f8dff;
+  --accent-strong: #949fff;
+  --accent-soft: rgba(127, 141, 255, 0.18);
   --danger: #ff5c57;
-  --danger-soft: rgba(255, 92, 87, 0.14);
+  --danger-soft: rgba(255, 92, 87, 0.15);
   --warn: #ffbe4c;
   --ok: #46d484;
+
+  /* Liquid-glass material */
+  --glass-blur: 30px;
+  --glass-sat: 180%;
+
+  /* Continuous, Apple-scale radii */
+  --r-xs: 8px;
+  --r-sm: 11px;
+  --r-md: 14px;
+  --r-lg: 18px;
+  --r-xl: 22px;
+
+  /* Specular top edge + soft inner glass rim */
+  --edge: inset 0 1px 0 0 rgba(255, 255, 255, 0.16);
+  --edge-soft: inset 0 1px 0 0 rgba(255, 255, 255, 0.1);
+  --rim: inset 0 0 0 1px rgba(255, 255, 255, 0.04);
+
+  /* Layered elevation */
+  --shadow-1: 0 1px 3px rgba(0, 0, 0, 0.24);
+  --shadow-2: 0 8px 30px -6px rgba(0, 0, 0, 0.42);
+  --shadow-3: 0 30px 80px -16px rgba(0, 0, 0, 0.6);
+
+  /* Motion — a gentle liquid overshoot for entrances */
+  --spring: cubic-bezier(0.34, 1.32, 0.42, 1);
+  --ease: cubic-bezier(0.22, 0.9, 0.32, 1);
+
   --font-ui:
     -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI Variable",
     "Segoe UI", system-ui, sans-serif;
@@ -48,7 +81,10 @@ body {
   color: var(--text);
   font-family: var(--font-ui);
   font-size: 13px;
+  letter-spacing: -0.006em;
   -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  font-variant-numeric: tabular-nums;
   user-select: none;
   cursor: default;
   overflow: hidden;
@@ -59,16 +95,27 @@ body.plat-linux {
   background: var(--bg-solid);
 }
 
-/* The tint layer that makes vibrancy readable. */
+/* Tint layer + a faint ambient light from top-left, for depth. */
 .app-shell {
   height: 100%;
-  background: var(--bg-tint);
+  background:
+    radial-gradient(
+      120% 90% at 20% -10%,
+      rgba(127, 141, 255, 0.08),
+      transparent 55%
+    ),
+    var(--bg-tint);
   display: flex;
   flex-direction: column;
 }
 
 body.plat-linux .app-shell {
-  background: transparent;
+  background: radial-gradient(
+      120% 90% at 20% -10%,
+      rgba(127, 141, 255, 0.06),
+      transparent 55%
+    ),
+    transparent;
 }
 
 /* ------------------------------------------------------------------ */
@@ -76,24 +123,37 @@ body.plat-linux .app-shell {
 /* ------------------------------------------------------------------ */
 
 .glass-card {
+  position: relative;
   background: linear-gradient(
     180deg,
-    rgba(255, 255, 255, 0.075),
+    rgba(255, 255, 255, 0.09),
     rgba(255, 255, 255, 0.035)
   );
   border: 1px solid var(--hairline);
-  border-radius: 16px;
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.09),
-    0 24px 60px rgba(0, 0, 0, 0.45);
-  backdrop-filter: blur(24px) saturate(1.2);
-  -webkit-backdrop-filter: blur(24px) saturate(1.2);
+  border-radius: var(--r-xl);
+  box-shadow: var(--edge), var(--rim), var(--shadow-3);
+  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-sat));
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-sat));
+}
+
+/* A faint specular sheen skimming the top of large glass panels. */
+.glass-card::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  background: radial-gradient(
+    100% 40% at 50% 0%,
+    rgba(255, 255, 255, 0.08),
+    transparent 70%
+  );
 }
 
 .eyebrow {
   font-size: 11px;
   font-weight: 600;
-  letter-spacing: 0.08em;
+  letter-spacing: 0.07em;
   text-transform: uppercase;
   color: var(--text-faint);
 }
@@ -108,62 +168,79 @@ body.plat-linux .app-shell {
   justify-content: center;
   gap: 6px;
   height: 34px;
-  padding: 0 14px;
-  border-radius: 9px;
+  padding: 0 15px;
+  border-radius: var(--r-sm);
   font: 500 13px var(--font-ui);
+  letter-spacing: -0.01em;
   border: 1px solid transparent;
   cursor: default;
   transition:
-    background 120ms ease,
-    border-color 120ms ease,
-    opacity 120ms ease;
+    background 140ms var(--ease),
+    border-color 140ms var(--ease),
+    transform 120ms var(--ease),
+    box-shadow 140ms var(--ease),
+    opacity 140ms var(--ease);
   white-space: nowrap;
 }
 
 .btn:disabled {
-  opacity: 0.45;
+  opacity: 0.4;
   pointer-events: none;
 }
 
+.btn:active:not(:disabled) {
+  transform: scale(0.97);
+}
+
 .btn-primary {
-  background: var(--accent);
+  background: linear-gradient(180deg, var(--accent-strong), var(--accent));
   color: #0b0d14;
   font-weight: 600;
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.28);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.4),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.12),
+    0 4px 14px -2px rgba(127, 141, 255, 0.5);
 }
 
-.btn-primary:hover {
-  background: #8b9bff;
+.btn-primary:hover:not(:disabled) {
+  background: linear-gradient(180deg, #a3aeff, #8c99ff);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.45),
+    0 6px 20px -2px rgba(127, 141, 255, 0.6);
 }
 
-.btn-primary:active {
-  background: #6a7cf2;
+.btn-primary:active:not(:disabled) {
+  background: linear-gradient(180deg, #7c8bf5, #6a7cf2);
 }
 
 .btn-ghost {
   background: var(--panel);
   border-color: var(--hairline);
   color: var(--text);
+  box-shadow: var(--edge-soft);
+  backdrop-filter: blur(12px) saturate(160%);
+  -webkit-backdrop-filter: blur(12px) saturate(160%);
 }
 
-.btn-ghost:hover {
+.btn-ghost:hover:not(:disabled) {
   background: var(--panel-strong);
   border-color: var(--hairline-strong);
 }
 
 .field {
   width: 100%;
-  height: 36px;
-  padding: 0 12px;
-  border-radius: 9px;
+  height: 37px;
+  padding: 0 13px;
+  border-radius: var(--r-sm);
   background: var(--field);
   border: 1px solid var(--hairline);
   color: var(--text);
   font: 400 13px var(--font-ui);
   outline: none;
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.2);
   transition:
-    border-color 120ms ease,
-    box-shadow 120ms ease;
+    border-color 140ms var(--ease),
+    box-shadow 140ms var(--ease);
 }
 
 .field::placeholder {
@@ -172,7 +249,9 @@ body.plat-linux .app-shell {
 
 .field:focus {
   border-color: var(--accent);
-  box-shadow: 0 0 0 3px var(--accent-soft);
+  box-shadow:
+    inset 0 1px 2px rgba(0, 0, 0, 0.2),
+    0 0 0 3.5px var(--accent-soft);
 }
 
 .field-error {
@@ -181,27 +260,40 @@ body.plat-linux .app-shell {
 
 .field-error:focus {
   border-color: var(--danger);
-  box-shadow: 0 0 0 3px var(--danger-soft);
+  box-shadow:
+    inset 0 1px 2px rgba(0, 0, 0, 0.2),
+    0 0 0 3.5px var(--danger-soft);
+}
+
+select.field {
+  appearance: none;
+  -webkit-appearance: none;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%239aa1b6' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'><path d='M6 9l6 6 6-6'/></svg>");
+  background-repeat: no-repeat;
+  background-position: right 12px center;
+  padding-right: 32px;
 }
 
 input[type="checkbox"].check {
   appearance: none;
-  width: 15px;
-  height: 15px;
+  width: 16px;
+  height: 16px;
   flex: none;
-  border-radius: 4.5px;
+  border-radius: 5px;
   border: 1px solid var(--hairline-strong);
   background: var(--field);
   display: inline-grid;
   place-content: center;
   transition:
-    background 100ms ease,
-    border-color 100ms ease;
+    background 120ms var(--ease),
+    border-color 120ms var(--ease),
+    transform 120ms var(--spring);
 }
 
 input[type="checkbox"].check:checked {
-  background: var(--accent);
+  background: linear-gradient(180deg, var(--accent-strong), var(--accent));
   border-color: var(--accent);
+  box-shadow: 0 2px 8px -2px rgba(127, 141, 255, 0.6);
 }
 
 input[type="checkbox"].check:checked::before {
@@ -213,7 +305,7 @@ input[type="checkbox"].check:checked::before {
 }
 
 input[type="checkbox"].check:focus-visible {
-  box-shadow: 0 0 0 3px var(--accent-soft);
+  box-shadow: 0 0 0 3.5px var(--accent-soft);
 }
 
 :focus-visible {
@@ -233,12 +325,13 @@ kbd {
   background: var(--panel);
   border: 1px solid var(--hairline);
   border-bottom-width: 2px;
-  border-radius: 5px;
+  border-radius: 6px;
   padding: 1px 5px;
 }
 
 .mono {
   font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
 }
 
 /* ------------------------------------------------------------------ */
@@ -248,7 +341,7 @@ kbd {
 @keyframes rise-in {
   from {
     opacity: 0;
-    transform: translateY(6px) scale(0.995);
+    transform: translateY(8px) scale(0.98);
   }
   to {
     opacity: 1;
@@ -257,7 +350,7 @@ kbd {
 }
 
 .rise-in {
-  animation: rise-in 240ms cubic-bezier(0.2, 0.9, 0.3, 1) both;
+  animation: rise-in 300ms var(--spring) both;
 }
 
 @keyframes shake {
@@ -287,6 +380,7 @@ kbd {
 @media (prefers-reduced-motion: reduce) {
   .rise-in,
   .shake,
+  .glass-card::before,
   .dialog-panel,
   .palette {
     animation: none;
@@ -301,7 +395,7 @@ kbd {
 /* ------------------------------------------------------------------ */
 
 .titlebar {
-  height: 44px;
+  height: 46px;
   flex: none;
   display: flex;
   align-items: center;
@@ -323,11 +417,14 @@ body.plat-linux .titlebar {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  height: 24px;
-  padding: 0 10px;
+  height: 25px;
+  padding: 0 11px;
   border-radius: 999px;
   border: 1px solid var(--hairline);
   background: var(--panel);
+  box-shadow: var(--edge-soft);
+  backdrop-filter: blur(14px) saturate(160%);
+  -webkit-backdrop-filter: blur(14px) saturate(160%);
   font-size: 11.5px;
   font-weight: 500;
   color: var(--text-dim);
@@ -337,13 +434,15 @@ body.plat-linux .titlebar {
   width: 7px;
   height: 7px;
   border-radius: 999px;
+  box-shadow: 0 0 8px 0 currentColor;
 }
 
 button.status-pill {
   cursor: default;
   transition:
-    background 100ms ease,
-    border-color 100ms ease;
+    background 120ms var(--ease),
+    border-color 120ms var(--ease),
+    transform 120ms var(--ease);
 }
 
 button.status-pill:hover {
@@ -352,12 +451,16 @@ button.status-pill:hover {
   color: var(--text);
 }
 
+button.status-pill:active {
+  transform: scale(0.96);
+}
+
 /* ------------------------------------------------------------------ */
 /* Main layout: sidebar, env tabs, secret rows                         */
 /* ------------------------------------------------------------------ */
 
 .sidebar {
-  width: 232px;
+  width: 234px;
   flex: none;
   display: flex;
   flex-direction: column;
@@ -369,15 +472,17 @@ button.status-pill:hover {
 .sidebar-item {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 9px;
   width: 100%;
-  padding: 7px 9px;
-  border-radius: 8px;
+  padding: 8px 10px;
+  border-radius: var(--r-sm);
   border: 1px solid transparent;
   text-align: left;
   color: var(--text-dim);
   font: 500 13px var(--font-ui);
-  transition: background 100ms ease;
+  transition:
+    background 120ms var(--ease),
+    color 120ms var(--ease);
 }
 
 .sidebar-item:hover {
@@ -389,6 +494,7 @@ button.status-pill:hover {
   background: var(--panel-strong);
   border-color: var(--hairline);
   color: var(--text);
+  box-shadow: var(--edge-soft);
 }
 
 .sidebar-item .row-actions {
@@ -399,15 +505,15 @@ button.status-pill:hover {
   display: inline-flex;
   align-items: center;
   gap: 7px;
-  height: 30px;
-  padding: 0 12px;
-  border-radius: 8px;
+  height: 31px;
+  padding: 0 13px;
+  border-radius: var(--r-sm);
   border: 1px solid transparent;
   color: var(--text-dim);
   font: 500 12.5px var(--font-ui);
   transition:
-    background 100ms ease,
-    color 100ms ease;
+    background 120ms var(--ease),
+    color 120ms var(--ease);
 }
 
 .env-tab:hover {
@@ -419,6 +525,7 @@ button.status-pill:hover {
   background: var(--panel-strong);
   border-color: var(--hairline);
   color: var(--text);
+  box-shadow: var(--edge-soft);
 }
 
 /* Production is red. Everywhere. Consistently. */
@@ -436,8 +543,8 @@ button.status-pill:hover {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 7px 12px;
-  border-radius: 9px;
+  padding: 8px 13px;
+  border-radius: var(--r-md);
   border: 1px solid rgba(255, 92, 87, 0.3);
   background: var(--danger-soft);
   color: var(--danger);
@@ -450,10 +557,13 @@ button.status-pill:hover {
   grid-template-columns: minmax(180px, 1.1fr) 1.6fr auto;
   align-items: center;
   gap: 12px;
-  padding: 9px 12px;
-  border-radius: 9px;
+  padding: 10px 13px;
+  border-radius: var(--r-md);
   border: 1px solid transparent;
   outline: none;
+  transition:
+    background 120ms var(--ease),
+    border-color 120ms var(--ease);
 }
 
 .secret-row:hover {
@@ -464,11 +574,12 @@ button.status-pill:hover {
 .secret-row[data-focused="true"] {
   background: var(--panel);
   border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
 }
 
 .secret-row .row-actions {
   opacity: 0;
-  transition: opacity 100ms ease;
+  transition: opacity 120ms var(--ease);
 }
 
 .secret-row:hover .row-actions,
@@ -487,9 +598,9 @@ button.status-pill:hover {
 .badge {
   display: inline-flex;
   align-items: center;
-  height: 18px;
-  padding: 0 7px;
-  border-radius: 5px;
+  height: 19px;
+  padding: 0 8px;
+  border-radius: 6px;
   border: 1px solid var(--hairline);
   background: var(--panel);
   color: var(--text-dim);
@@ -501,17 +612,24 @@ button.status-pill:hover {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 26px;
-  height: 26px;
-  border-radius: 7px;
+  width: 27px;
+  height: 27px;
+  border-radius: var(--r-xs);
   color: var(--text-dim);
   border: 1px solid transparent;
-  transition: background 100ms ease;
+  transition:
+    background 120ms var(--ease),
+    color 120ms var(--ease),
+    transform 120ms var(--ease);
 }
 
 .icon-btn:hover {
   background: var(--panel-strong);
   color: var(--text);
+}
+
+.icon-btn:active {
+  transform: scale(0.92);
 }
 
 .icon-btn.danger:hover {
@@ -520,16 +638,16 @@ button.status-pill:hover {
 }
 
 /* ------------------------------------------------------------------ */
-/* Overlays: dialogs, command palette, toasts                          */
+/* Overlays: dialogs, command palette, toasts — real glass sheets      */
 /* ------------------------------------------------------------------ */
 
 .overlay {
   position: fixed;
   inset: 0;
-  background: rgba(5, 6, 10, 0.55);
-  backdrop-filter: blur(3px);
-  -webkit-backdrop-filter: blur(3px);
-  animation: overlay-in 140ms ease both;
+  background: rgba(6, 7, 12, 0.4);
+  backdrop-filter: blur(6px) saturate(120%);
+  -webkit-backdrop-filter: blur(6px) saturate(120%);
+  animation: overlay-in 180ms var(--ease) both;
 }
 
 @keyframes overlay-in {
@@ -543,27 +661,31 @@ button.status-pill:hover {
   top: 50%;
   left: 50%;
   transform: translate(-50%, -50%);
-  width: 420px;
+  width: 430px;
   max-width: calc(100vw - 48px);
   max-height: 85vh;
   overflow-y: auto;
-  padding: 20px;
-  border-radius: 14px;
+  padding: 22px;
+  border-radius: var(--r-xl);
   border: 1px solid var(--hairline-strong);
-  background: #161923f2;
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.07),
-    0 24px 70px rgba(0, 0, 0, 0.55);
+  background: linear-gradient(
+    180deg,
+    rgba(30, 33, 45, 0.8),
+    rgba(21, 23, 32, 0.76)
+  );
+  box-shadow: var(--edge), var(--rim), var(--shadow-3);
+  backdrop-filter: blur(40px) saturate(var(--glass-sat));
+  -webkit-backdrop-filter: blur(40px) saturate(var(--glass-sat));
   /* Dedicated keyframes: `rise-in` ends at `transform: none`, which (fill:
      both) would wipe the centering translate and pin the panel's top-left
      to the viewport center — clipping tall dialogs off-window. */
-  animation: dialog-in 160ms cubic-bezier(0.2, 0.9, 0.3, 1) both;
+  animation: dialog-in 240ms var(--spring) both;
 }
 
 @keyframes dialog-in {
   from {
     opacity: 0;
-    transform: translate(-50%, -50%) translateY(6px) scale(0.995);
+    transform: translate(-50%, -50%) translateY(10px) scale(0.96);
   }
   to {
     opacity: 1;
@@ -573,24 +695,30 @@ button.status-pill:hover {
 
 .palette {
   position: fixed;
-  top: 18%;
+  top: 16%;
   left: 50%;
   transform: translateX(-50%);
-  width: 480px;
+  width: 500px;
   max-width: calc(100vw - 48px);
-  border-radius: 13px;
+  border-radius: var(--r-lg);
   border: 1px solid var(--hairline-strong);
-  background: #14171ff5;
-  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.55);
+  background: linear-gradient(
+    180deg,
+    rgba(26, 29, 40, 0.82),
+    rgba(18, 20, 28, 0.78)
+  );
+  box-shadow: var(--edge), var(--rim), var(--shadow-3);
+  backdrop-filter: blur(40px) saturate(var(--glass-sat));
+  -webkit-backdrop-filter: blur(40px) saturate(var(--glass-sat));
   overflow: hidden;
   /* Same reason as .dialog-panel: keep the centering translateX. */
-  animation: palette-in 140ms cubic-bezier(0.2, 0.9, 0.3, 1) both;
+  animation: palette-in 220ms var(--spring) both;
 }
 
 @keyframes palette-in {
   from {
     opacity: 0;
-    transform: translateX(-50%) translateY(6px) scale(0.995);
+    transform: translateX(-50%) translateY(10px) scale(0.97);
   }
   to {
     opacity: 1;
@@ -600,39 +728,48 @@ button.status-pill:hover {
 
 .palette input {
   width: 100%;
-  height: 44px;
-  padding: 0 16px;
+  height: 46px;
+  padding: 0 18px;
   background: transparent;
   border: none;
   border-bottom: 1px solid var(--hairline);
   outline: none;
   color: var(--text);
   font: 400 14px var(--font-ui);
+  letter-spacing: -0.01em;
 }
 
 .palette-item {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 11px;
   width: 100%;
-  padding: 9px 14px;
+  padding: 10px 16px;
   color: var(--text-dim);
   font: 400 13px var(--font-ui);
   text-align: left;
+  transition: background 100ms var(--ease);
 }
 
 .palette-item[data-active="true"] {
   background: var(--accent-soft);
   color: var(--text);
+  box-shadow: inset 2px 0 0 0 var(--accent);
 }
 
 .toast {
   pointer-events: auto;
-  padding: 9px 14px;
-  border-radius: 10px;
+  padding: 10px 15px;
+  border-radius: var(--r-md);
   border: 1px solid var(--hairline-strong);
-  background: #171a24f2;
+  background: linear-gradient(
+    180deg,
+    rgba(28, 31, 43, 0.85),
+    rgba(20, 22, 31, 0.82)
+  );
   color: var(--text);
   font: 500 12.5px var(--font-ui);
-  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.45);
+  box-shadow: var(--edge), var(--shadow-2);
+  backdrop-filter: blur(24px) saturate(var(--glass-sat));
+  -webkit-backdrop-filter: blur(24px) saturate(var(--glass-sat));
 }
