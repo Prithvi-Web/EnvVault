@@ -4,7 +4,7 @@
 
 ---
 
-You are continuing the build of **EnvVault**, a fully-local, zero-cloud desktop secrets manager for developers (Tauri v2 + Rust + React). This is a multi-session project built in phase gates. Phases 0–7 are DONE, committed, and pushed to GitHub. Your job is **Phase 8, then Phase 9**. The bar the user has set, verbatim: **"completely flawless, absolutely 0 errors."** Hold to it.
+You are continuing the build of **EnvVault**, a fully-local, zero-cloud desktop secrets manager for developers (Tauri v2 + Rust + React). This is a multi-session project built in phase gates. Phases 0–8 are DONE and committed. Your job is **Phase 9 (hardening — the final phase)**. The bar the user has set, verbatim: **"completely flawless, absolutely 0 errors."** Hold to it.
 
 ## Read these first
 - The master spec: `/Users/prithvivinay/Downloads/envvault-master-prompt.md` — read it whole before touching code. Sections 4 (security invariants), 8 (error doctrine), 10 (testing), 11 (phase gates) govern everything.
@@ -20,10 +20,11 @@ A **non-coder**. Give plain-English explanations, no jargon dumps. They cannot r
 3. Write tests as you go, in `envvault-core` (that's where all logic lives). Cutting a feature is acceptable; cutting tests is not.
 4. Be honest and non-sycophantic. If the spec is wrong, say so and propose better (this has happened several times and improved the product).
 
-## Current state (as of end of Phase 7)
-- Git: `main` branch, latest commit `Phase 7: secret health dashboard`. Local == origin, tree clean. CI green on all 3 OSes for the pushed commits (verify the Phase 7 run went green — see CI section).
+## Current state (as of end of Phase 8)
+- Git: `main` branch, latest commit `Phase 8: Secure Share (F8) + vault backup & portability (F9)`. Verify CI went green after the user pushed.
 - Toolchain: Rust installed via rustup — **every bash shell must start with `source "$HOME/.cargo/env"`** or cargo isn't found. Node/npm already present.
-- **14 Rust test suites + 6 frontend (vitest) tests, all green. Zero clippy warnings under `-D warnings`. Zero tsc errors (strict + noUncheckedIndexedAccess).**
+- **16 Rust test suites / 151 tests + 10 frontend (vitest) tests, all green. Zero clippy warnings under `-D warnings`. Zero tsc errors (strict + noUncheckedIndexedAccess). no-http audit green on all 6 targets.**
+- Phase 8 shipped: core `share` module (bundles are PLAIN armored age files decryptable with the stock age CLI; passphrase XOR age/SSH recipient keys; expiry inside the ciphertext, re-checked at confirm), `envvault import` CLI subcommand, vault portability (`export_vault_copy`, `replace_vault_file`, `Vault::merge_from`, `update_vault_try`), rate-limited `unwrap_vault_identity_guarded` + `update_vault_guarded` (imports are password attempts), GUI dialogs (Share, ImportBundle, VaultBackup, ShareKey) + palette actions, README "Your data is not hostage" section with the stock-age decryption recipe. A user's share key = their vault's X25519 public key. The `age` crate now has the "ssh" feature (pure crypto deps only).
 
 ## Architecture (already built — match these patterns exactly)
 Cargo workspace at repo root, three crates under `crates/`:
@@ -45,7 +46,11 @@ Cargo workspace at repo root, three crates under `crates/`:
 4. **macOS FSEvents reports canonical `/private/var/...` paths** but tempdirs are `/var/...` symlinks. The Guard canonicalizes watched roots so prefix-matching works. Any new fs-path matching must canonicalize.
 5. **CLI signal demos must run envvault in the FOREGROUND.** Backgrounding (`envvault &`) makes the shell set SIGINT=SIG_IGN, which the child inherits, disabling its trap — looks like a bug but isn't. The impl resets child signal dispositions in `pre_exec`. When writing signal tests, also avoid orphaned background `sleep` holding the stdout pipe (use a short-sleep loop instead).
 6. **`commit -m` with `⌘K`/special chars breaks zsh.** Write commit messages to a scratchpad file and use `git commit -F file`.
-7. **Live-testing overlays:** the user's Mac runs **NotchNest** (blocks clicks in a top-center band) and **Wispr Flow** (blocks bottom-center). Prefer keyboard paths (⌘K palette, `N`, `/`, `Tab`, `Return`) and right-edge clicks. If a click is blocked, use the command palette or keyboard.
+7. **Live-testing overlays:** the user's Mac runs **NotchNest** (blocks clicks in a top-center band) and **Wispr Flow** (blocks bottom-center — extends surprisingly high, ~y 560–850 in the 1372px-wide screenshot space). Prefer keyboard paths (⌘K palette, `N`, `/`, `Tab`, `Return`) and right-edge clicks. If a click is blocked, use the command palette or keyboard.
+8. **Native save/open panels are OUT-OF-PROCESS** (`openAndSavePanelService`) — sometimes invisible to computer-use screenshots even when open. Drive them blind: `cmd+shift+g` → `cmd+a` → type the full path (ALWAYS cmd+a first; the go-to field remembers old text) → `Return` (navigate) → `Return` (confirm), then verify the file on disk. Save panels needed `dialog:allow-save` in `capabilities/default.json` (added in Phase 8 — `open` alone was granted before, and a missing capability makes the JS promise reject SILENTLY).
+9. **Palette rows shift as actions appear/disappear** (e.g. "Share <env>" hides when the env is empty) — never click a palette row by remembered position; type-to-filter then Return.
+10. **Escape does not reliably close Radix dialogs in this WKWebView** — dismiss via the dialog's own buttons (Tab + Return). Also, opening the ⌘K palette on top of an open Radix dialog fights its focus trap: palette input never focuses and outside-clicks are swallowed. Close the dialog first. (Candidate Phase 9 polish: palette shouldn't open over a modal, and Escape handling.)
+11. **Waiting for unlock in GUI automation:** unlock takes ~1s of scrypt; a batched click 2s after Return can race the transition. Screenshot to confirm the unlocked toolbar before clicking things on it.
 
 ## Commands you'll use constantly (always `source "$HOME/.cargo/env"` first)
 ```bash
@@ -82,12 +87,6 @@ Vault file = JSON envelope: `wrapped_identity` (X25519 vault identity, scrypt-wr
 
 ## WHAT TO BUILD
 
-### Phase 8 — Secure Share (F8) + Vault Backup & Portability (F9)
-Gate: round-trip a shared secrets bundle between two vaults; round-trip an encrypted vault export/import.
-- **Secure Share (F8):** Export a selected environment's secrets as a single `age`-encrypted `.age` file, encrypted EITHER to a passphrase (communicated out-of-band) OR to a recipient's `age`/SSH public key (genuinely secure, no shared secret). No server, no link, no upload — the file moves via Signal/AirDrop/USB. Recipient runs `envvault import <file>` (add this CLI subcommand) or imports via the GUI. Bake an **expiry timestamp inside the encrypted payload**; refuse to import an expired bundle. Be honest in docs: expiry is a courtesy guardrail, not cryptographic (someone can change their clock) — say so.
-- **Backup & Portability (F9):** One-click "Export encrypted vault" (it's already ciphertext — safe for Dropbox). One-click "Import vault" with a clear **merge vs replace** choice. Document the vault format in the README precisely enough that a user could decrypt it with the standalone `age` CLI + a script, WITHOUT EnvVault. State prominently: "Your data is not hostage. Here is exactly how to get it out." (You already have a passing test proving standalone-age decryption works — reference it.)
-- Put all crypto/serialization in core with tests (bundle create/parse, expiry enforcement, merge vs replace, wrong-passphrase, corrupted bundle). Thin commands + GUI in the app. Native file save/open dialogs (tauri-plugin-dialog is already a dep). Verify LIVE: create a bundle from one vault, import into a second vault, show the secrets arrived.
-
 ### Phase 9 — Hardening (Section 9, 10.3, 12)
 Gate: the full security test-suite output; the performance numbers vs Section 9; a written list of every known limitation.
 - **`tests/security.rs` (spec §10.3):** (1) grep the built binary + all app-data/temp dirs after a full workflow → ZERO plaintext secret values; (2) `Cargo.lock`/dep-graph has no HTTP client (already have `scripts/check-no-http.sh`); (3) log a secret deliberately → it appears as `[REDACTED]` (add a `tracing` layer incapable of printing `Secret<T>` if not already present); (4) after `envvault run -- true`, snapshot fs before/after → no `.env` created anywhere; (5) vault file is high-entropy ciphertext with no plaintext project names.
@@ -100,8 +99,9 @@ Gate: the full security test-suite output; the performance numbers vs Section 9;
 - Touch ID / Windows Hello biometric unlock via OS keychain (`keyring` crate) — was deferred; either implement or document as not-yet.
 - Lock-on-system-sleep / screen-lock (macOS platform hook) — auto-lock-on-idle and ⌘L already work.
 - Two minor keyboard-polish items: dialogs return focus to body not the originating row; arrow-key row focus doesn't survive a reveal.
+- From Phase 8 live testing: Escape doesn't close dialogs in this WKWebView (buttons work); ⌘K palette can open over a modal and fight its focus trap; the backup default filename uses the UTC date (can be a day ahead of local). SSH-key bundle import in the CLI/GUI is deliberately not implemented (the vault share key is the mainline; SSH-encrypted bundles decrypt with the stock age CLI) — say so in LIMITATIONS.
 
 ## The standard (from the spec, section 14)
 "A tool a developer can put their production Stripe key into and sleep soundly." Memory-safe crypto in Rust, a compiler-enforced boundary that can't drift, atomic writes that survive a power cut, tests that PROVE the security invariants rather than asserting them, and total honesty in the docs about what it does not protect against. Build it that way.
 
-First action in the new session: `source "$HOME/.cargo/env"`, `cd` into the project, run `cargo test --workspace` and `git log --oneline -5` to confirm you're at a clean green Phase 7, read the master spec, then begin Phase 8.
+First action in the new session: `source "$HOME/.cargo/env"`, `cd` into the project, run `cargo test --workspace` and `git log --oneline -5` to confirm you're at a clean green Phase 8, read the master spec, then begin Phase 9.
