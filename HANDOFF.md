@@ -4,7 +4,7 @@
 
 ---
 
-You are continuing the build of **EnvVault**, a fully-local, zero-cloud desktop secrets manager for developers (Tauri v2 + Rust + React). This is a multi-session project built in phase gates. Phases 0–8 are DONE and committed. Your job is **Phase 9 (hardening — the final phase)**. The bar the user has set, verbatim: **"completely flawless, absolutely 0 errors."** Hold to it.
+You are picking up **EnvVault**, a fully-local, zero-cloud desktop secrets manager for developers (Tauri v2 + Rust + React). It was built across multiple sessions in phase gates. **ALL PHASES 0–9 ARE DONE AND COMMITTED — the phased build per the master prompt is COMPLETE.** There is no "next phase." Any further work is new: bug fixes, follow-ups the user names, or polishing deferred items (see the LIMITATIONS list). The bar the user set, verbatim: **"completely flawless, absolutely 0 errors."** Hold to it.
 
 ## Read these first
 - The master spec: `/Users/prithvivinay/Downloads/envvault-master-prompt.md` — read it whole before touching code. Sections 4 (security invariants), 8 (error doctrine), 10 (testing), 11 (phase gates) govern everything.
@@ -20,11 +20,22 @@ A **non-coder**. Give plain-English explanations, no jargon dumps. They cannot r
 3. Write tests as you go, in `envvault-core` (that's where all logic lives). Cutting a feature is acceptable; cutting tests is not.
 4. Be honest and non-sycophantic. If the spec is wrong, say so and propose better (this has happened several times and improved the product).
 
-## Current state (as of end of Phase 8)
-- Git: `main` branch, latest commit `Phase 8: Secure Share (F8) + vault backup & portability (F9)`. Verify CI went green after the user pushed.
+## Current state (as of end of Phase 9 — project complete)
+- Git: `main` branch, latest commit `Phase 9: hardening — security suite, panic wipe, perf, docs` (`ba85405`). Committed locally; the user pushes via GitHub Desktop. Verify CI went green after they push.
 - Toolchain: Rust installed via rustup — **every bash shell must start with `source "$HOME/.cargo/env"`** or cargo isn't found. Node/npm already present.
-- **16 Rust test suites / 151 tests + 10 frontend (vitest) tests, all green. Zero clippy warnings under `-D warnings`. Zero tsc errors (strict + noUncheckedIndexedAccess). no-http audit green on all 6 targets.**
-- Phase 8 shipped: core `share` module (bundles are PLAIN armored age files decryptable with the stock age CLI; passphrase XOR age/SSH recipient keys; expiry inside the ciphertext, re-checked at confirm), `envvault import` CLI subcommand, vault portability (`export_vault_copy`, `replace_vault_file`, `Vault::merge_from`, `update_vault_try`), rate-limited `unwrap_vault_identity_guarded` + `update_vault_guarded` (imports are password attempts), GUI dialogs (Share, ImportBundle, VaultBackup, ShareKey) + palette actions, README "Your data is not hostage" section with the stock-age decryption recipe. A user's share key = their vault's X25519 public key. The `age` crate now has the "ssh" feature (pure crypto deps only).
+- **18 Rust test suites / 169 tests + 10 frontend (vitest) tests, all green. Zero clippy warnings under `-D warnings`. Zero tsc errors (strict + noUncheckedIndexedAccess). no-http audit green on all 6 targets. envvault-core line coverage 90.1% (`cargo llvm-cov -p envvault-core`).**
+- Phase 9 shipped: `tests/security.rs` (§10.3 — no plaintext on disk after a full workflow, vault-file entropy + no plaintext names, redaction incl. compile-time `static_assertions` no-Display proofs) + CLI `run_writes_no_file_anywhere`; a panic hook (`state.rs::wipe_secrets_for_panic`) that zeroizes the session before a release-abort; About screen stating "0 network requests" truthfully; ⌘K no longer opens over a modal; local-date backup filename; `ENVVAULT_PERF` launch instrumentation; README/SECURITY.md/LIMITATIONS.md/PERFORMANCE.md. Perf vs §9 all pass except cold-launch (~475ms to interactive vs 400ms target — WKWebView warmup, honestly documented) and idle RSS (~94MB RSS / ~24MB private — RSS overcounts shared WebKit pages; documented).
+- Phase 8 (context): core `share` module (bundles are PLAIN armored age files decryptable with the stock age CLI; passphrase XOR age/SSH recipient keys; expiry inside the ciphertext, re-checked at confirm), `envvault import` CLI subcommand, vault portability (`export_vault_copy`, `replace_vault_file`, `Vault::merge_from`, `update_vault_try`), rate-limited `unwrap_vault_identity_guarded` + `update_vault_guarded`, GUI dialogs (Share, ImportBundle, VaultBackup, ShareKey) + palette actions. A user's share key = their vault's X25519 public key. The `age` crate has the "ssh" feature.
+
+## CRITICAL live-testing gotcha discovered in Phase 9 (internalize this)
+**The RELEASE binary IGNORES `ENVVAULT_DEV_VAULT_DIR`** — that override is `#[cfg(debug_assertions)]`-only by design (users must not be able to relocate their vault into a repo). So a release app launched with that env var reads the USER'S REAL VAULT at `~/Library/Application Support/EnvVault/vault.age`. In Phase 9 this caused test-password attempts to register as failures against the real vault (its throttle counter was created and had to be cleaned up). **For any live GUI verification against a scratch vault, ALWAYS build/run a DEBUG bundle (`tauri build --debug`), never release.** Use release ONLY for perf/size measurement and only at the locked screen (never type a password into it). Never attempt to unlock the user's real vault; if you ever create a throttle file at the real path from testing, `rm` it so they aren't locked out.
+
+## Deferred items (documented honestly in LIMITATIONS.md — future work if the user asks)
+- Touch ID / Windows Hello biometric unlock (keyring crate) — not implemented.
+- Lock-on-system-sleep / screen-lock hook — auto-lock-on-idle + ⌘L work; instant lock on lid-close does not.
+- Esc doesn't close Radix dialogs in this WKWebView (every dialog has a button); focus returns to body not the originating row; arrow-key row focus doesn't survive a reveal.
+- `envvault import` decrypts passphrase + vault-share-key bundles, NOT SSH-key bundles (those are for the stock age CLI).
+- No signed installers; macOS bundles are ad-hoc signed.
 
 ## Architecture (already built — match these patterns exactly)
 Cargo workspace at repo root, three crates under `crates/`:
@@ -85,23 +96,12 @@ Vault file = JSON envelope: `wrapped_identity` (X25519 vault identity, scrypt-wr
 - End messages with: `Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>` (match the model you are).
 - After committing, watch CI: poll `https://api.github.com/repos/Prithvi-Web/EnvVault/actions/runs?per_page=1` for status/conclusion; read failed-job logs by navigating claude-in-chrome to the job's `html_url` and `get_page_text`. CI runs build+clippy+fmt+test+frontend on ubuntu+macos+windows plus a no-http-crates audit.
 
-## WHAT TO BUILD
+## WHAT'S LEFT
+The phased build is finished — all 10 gates (0–9) are met. The deliverables in spec §12 exist: full source building clean on all 3 OSes with zero warnings, README + SECURITY.md + LIMITATIONS.md + PERFORMANCE.md, the passing test suite with coverage reported. There is no remaining phase work.
 
-### Phase 9 — Hardening (Section 9, 10.3, 12)
-Gate: the full security test-suite output; the performance numbers vs Section 9; a written list of every known limitation.
-- **`tests/security.rs` (spec §10.3):** (1) grep the built binary + all app-data/temp dirs after a full workflow → ZERO plaintext secret values; (2) `Cargo.lock`/dep-graph has no HTTP client (already have `scripts/check-no-http.sh`); (3) log a secret deliberately → it appears as `[REDACTED]` (add a `tracing` layer incapable of printing `Secret<T>` if not already present); (4) after `envvault run -- true`, snapshot fs before/after → no `.env` created anywhere; (5) vault file is high-entropy ciphertext with no plaintext project names.
-- **Panic hook** that zeroizes the key before the process dies (no decrypted key in a core dump).
-- **Performance vs Section 9** (measure, don't guess; report honestly, propose tradeoffs if any miss): cold launch→unlock <400ms; unlock (KDF+decrypt, 100 secrets) <1s; search <16ms; guard idle CPU <0.1% (already measured 0.0%); binary <15MB; idle RSS <80MB (measured ~111MB debug — measure the RELEASE build). Build `--release` for real numbers.
-- **Deliverables (Section 12):** `README.md` (install for all 3 OSes, the honest threat model from §4.8 — protects against accidental `git add`, secrets in history/Docker context/backups/stolen laptop at rest; does NOT protect against malware running as your user, compromised deps, or someone who knows your master password — do not overclaim), vault-format decryption doc; `SECURITY.md` (the §4 invariants + how to report a vuln); `LIMITATIONS.md` (everything it doesn't do + everything you're unsure about — e.g. secure-delete on SSD/APFS can't guarantee old blocks are gone, interactive-TTY nuance in the CLI, biometric/Touch-ID unlock is deferred, lock-on-sleep hook deferred). Ensure `cargo clippy -- -D warnings` and `tsc --noEmit` both clean.
-- Confirm the **CSP** in `tauri.conf.json` is locked (`default-src 'self'`, no remote `connect-src`) and the About screen states "0 network requests / no networking code" truthfully.
-
-## Deferred items promised honestly at earlier gates (do in Phase 9 or note in LIMITATIONS)
-- Touch ID / Windows Hello biometric unlock via OS keychain (`keyring` crate) — was deferred; either implement or document as not-yet.
-- Lock-on-system-sleep / screen-lock (macOS platform hook) — auto-lock-on-idle and ⌘L already work.
-- Two minor keyboard-polish items: dialogs return focus to body not the originating row; arrow-key row focus doesn't survive a reveal.
-- From Phase 8 live testing: Escape doesn't close dialogs in this WKWebView (buttons work); ⌘K palette can open over a modal and fight its focus trap; the backup default filename uses the UTC date (can be a day ahead of local). SSH-key bundle import in the CLI/GUI is deliberately not implemented (the vault share key is the mainline; SSH-encrypted bundles decrypt with the stock age CLI) — say so in LIMITATIONS.
+If the user asks for more, it's one of: a bug they hit, a deferred item they want built (biometric unlock, lock-on-sleep, the keyboard-focus polish, signed installers — all in the CRITICAL/deferred sections above and in LIMITATIONS.md), or a new feature. Treat it as fresh work: brainstorm/plan first if it's non-trivial, keep all logic in `envvault-core` with tests, run the full verification, and do a LIVE **debug-build** demo before claiming it works.
 
 ## The standard (from the spec, section 14)
-"A tool a developer can put their production Stripe key into and sleep soundly." Memory-safe crypto in Rust, a compiler-enforced boundary that can't drift, atomic writes that survive a power cut, tests that PROVE the security invariants rather than asserting them, and total honesty in the docs about what it does not protect against. Build it that way.
+"A tool a developer can put their production Stripe key into and sleep soundly." Memory-safe crypto in Rust, a compiler-enforced boundary that can't drift, atomic writes that survive a power cut, tests that PROVE the security invariants rather than asserting them, and total honesty in the docs about what it does not protect against. That standard is met; keep it met.
 
-First action in the new session: `source "$HOME/.cargo/env"`, `cd` into the project, run `cargo test --workspace` and `git log --oneline -5` to confirm you're at a clean green Phase 8, read the master spec, then begin Phase 9.
+First action in a new session: `source "$HOME/.cargo/env"`, `cd` into the project, run `cargo test --workspace` and `git log --oneline -5` to confirm you're at a clean green Phase 9 (`ba85405`), then address whatever the user actually asks for.
