@@ -258,6 +258,47 @@ fn update_vault_try_persists_on_ok_and_returns_the_value() {
     );
 }
 
+/// The cross-process lock is acquirable standalone and its Debug is inert
+/// (a lock guard must never print anything interesting).
+#[test]
+fn vault_lock_is_acquirable_and_debug_is_inert() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = vault_file(dir.path(), "vault.age", "the password", "acme");
+    let lock = envvault_core::vault::VaultLock::acquire(&path).unwrap();
+    assert_eq!(format!("{lock:?}"), "VaultLock");
+}
+
+/// The infallible `update_vault` wrapper persists its mutation.
+#[test]
+fn update_vault_plain_wrapper_persists() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = vault_file(dir.path(), "vault.age", "the password", "acme");
+
+    envvault_core::vault::update_vault(&path, pw("the password"), |vault| {
+        vault.projects.clear();
+    })
+    .unwrap();
+
+    let unlocked = unlock_vault(&path, pw("the password")).unwrap();
+    assert!(unlocked.vault().projects.is_empty());
+}
+
+/// A temp file left behind by a killed writer is swept on the next save —
+/// it must not accumulate forever next to the vault.
+#[test]
+fn stale_temp_files_are_cleaned_up_on_save() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = vault_file(dir.path(), "vault.age", "the password", "acme");
+    let stale = dir.path().join(".vault.age.tmp.99999");
+    std::fs::write(&stale, b"leftover from a killed process").unwrap();
+
+    let mut unlocked = unlock_vault(&path, pw("the password")).unwrap();
+    unlocked.vault_mut().settings.auto_lock_minutes = Some(5);
+    unlocked.save().unwrap();
+
+    assert!(!stale.exists(), "stale temp file must be swept by the save");
+}
+
 #[test]
 fn update_vault_try_writes_nothing_on_error() {
     let dir = tempfile::tempdir().unwrap();

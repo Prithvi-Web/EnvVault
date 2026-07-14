@@ -430,6 +430,39 @@ fn apply_to_missing_environment_is_stale_id() {
     assert!(matches!(err, CoreError::StaleId));
 }
 
+/// The production-work-factor `seal_bundle` entry point — key recipients
+/// use X25519 only (no scrypt), so this is fast even at the real settings.
+#[test]
+fn production_seal_bundle_round_trips_with_key_recipients() {
+    let (vault, pid, dev) = seeded_vault();
+    let bundle = bundle_from_environment(&vault, pid, dev, None, Utc::now()).unwrap();
+    let identity = envvault_core::crypto::generate_identity();
+    let sealed = envvault_core::share::seal_bundle(
+        &bundle,
+        &ShareProtection::RecipientKeys(vec![identity.to_public().to_string()]),
+    )
+    .unwrap();
+    let opened = open_bundle_with_identity(sealed.as_bytes(), &identity, Utc::now()).unwrap();
+    assert_eq!(opened.secrets.len(), 2);
+}
+
+/// Header-inspection edge cases: broken armor, and an age-version line with
+/// no recipient stanzas at all. Both must fail closed as invalid bundles.
+#[test]
+fn inspect_rejects_broken_armor_and_stanzaless_headers() {
+    let broken_armor = b"-----BEGIN AGE ENCRYPTED FILE-----\n!!!not base64!!!\n";
+    assert!(matches!(
+        inspect_bundle(broken_armor),
+        Err(CoreError::BundleInvalid(_))
+    ));
+
+    let no_stanzas = b"age-encryption.org/v1\n--- MAC\nciphertext";
+    assert!(matches!(
+        inspect_bundle(no_stanzas),
+        Err(CoreError::BundleInvalid(_))
+    ));
+}
+
 /// The bundle's Debug output must never leak a secret value.
 #[test]
 fn bundle_debug_is_redacted() {

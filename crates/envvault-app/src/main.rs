@@ -91,7 +91,35 @@ fn spawn_auto_lock_monitor(handle: tauri::AppHandle) {
     });
 }
 
+/// Process start, for the §9 cold-launch measurement. Captured as early as
+/// `main` allows; the OS exec overhead before `main` is not included (noted
+/// in the measurement methodology).
+static PROCESS_START: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+
+/// Print elapsed-since-start to stderr — only when `ENVVAULT_PERF` is set.
+/// Costs one env lookup otherwise; exists so the §9 numbers can be measured
+/// on the real release binary instead of guessed.
+pub fn perf_checkpoint(label: &str) {
+    if std::env::var_os("ENVVAULT_PERF").is_some() {
+        if let Some(start) = PROCESS_START.get() {
+            eprintln!("ENVVAULT_PERF {label}: {:?}", start.elapsed());
+        }
+    }
+}
+
 fn main() {
+    let _ = PROCESS_START.set(std::time::Instant::now());
+
+    // Spec §8.5: a panic must not leave decrypted secrets behind. Release
+    // builds abort on panic (no unwinding, so Drop/zeroize never runs) —
+    // this hook drops the unlocked session and any pending share bundle,
+    // zeroizing every value, before the process dies.
+    let default_panic_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        state::wipe_secrets_for_panic();
+        default_panic_hook(info);
+    }));
+
     let specta = specta_builder();
 
     tauri::Builder::default()
@@ -102,6 +130,7 @@ fn main() {
         .manage(GuardManager::new())
         .invoke_handler(specta.invoke_handler())
         .setup(move |app| {
+            perf_checkpoint("tauri setup (window created)");
             specta.mount_events(app);
             spawn_auto_lock_monitor(app.handle().clone());
             // Parked .env backups expire after 7 days (spec F4.4).

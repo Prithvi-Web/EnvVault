@@ -23,6 +23,9 @@ specta = { version = "=2.0.0-rc.25", features = ["derive", "uuid", "chrono"] }
 tauri-specta = { version = "=2.0.0-rc.25", features = ["derive", "typescript"] }
 specta-typescript = "0.0.12"
 
+[dev-dependencies]
+tempfile = "3"
+
 # macOS: secrets are written to NSPasteboard with the ConcealedType marker so
 # clipboard managers do not archive them (spec §4.6). Other platforms use the
 # clipboard plugin's Rust API. This target table MUST stay last in the file:

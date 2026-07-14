@@ -39,10 +39,11 @@ export function SecretsTable({ filter, isProduction, onEdit, onDelete }: Secrets
     setFocusIdx(0);
   }, [projectId, envId]);
 
+  // Lowercase the query once, not twice per row — keeps search well inside
+  // the §9 one-frame budget even at 10× the spec's 100-secret scenario.
+  const query = filter.toLowerCase();
   const visible = secrets.filter(
-    (s) =>
-      s.key.toLowerCase().includes(filter.toLowerCase()) ||
-      (s.note ?? "").toLowerCase().includes(filter.toLowerCase()),
+    (s) => s.key.toLowerCase().includes(query) || (s.note ?? "").toLowerCase().includes(query),
   );
 
   async function doReveal(secret: SecretMeta) {

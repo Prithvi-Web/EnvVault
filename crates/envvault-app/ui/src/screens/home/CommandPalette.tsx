@@ -7,6 +7,7 @@ import {
   FolderLock,
   HardDriveDownload,
   Inbox,
+  Info,
   KeyRound,
   KeySquare,
   Layers,
@@ -38,6 +39,7 @@ interface CommandPaletteProps {
   onImportBundle: () => void;
   onVaultBackup: () => void;
   onShareKey: () => void;
+  onAbout: () => void;
 }
 
 export function CommandPalette({
@@ -52,6 +54,7 @@ export function CommandPalette({
   onImportBundle,
   onVaultBackup,
   onShareKey,
+  onAbout,
 }: CommandPaletteProps) {
   const projects = useVault((s) => s.projects);
   const selectProject = useVault((s) => s.selectProject);
@@ -92,6 +95,7 @@ export function CommandPalette({
         run: onVaultBackup,
       },
       { id: "share-key", label: "My share key", icon: KeyRound, run: onShareKey },
+      { id: "about", label: "About EnvVault", icon: Info, run: onAbout },
     ];
     if (onShareEnv) {
       const envName = project?.environments.find((e) => e.id === selectedEnvId)?.name;
@@ -133,6 +137,7 @@ export function CommandPalette({
     onImportBundle,
     onVaultBackup,
     onShareKey,
+    onAbout,
     selectEnv,
     selectProject,
   ]);

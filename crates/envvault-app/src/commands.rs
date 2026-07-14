@@ -42,6 +42,10 @@ pub struct UnlockOutcome {
 #[tauri::command]
 #[specta::specta]
 pub fn vault_status(state: State<'_, AppState>) -> Result<VaultStatus, AppError> {
+    // §9 measurement hook: the frontend calls this command on first mount,
+    // so process-start → here brackets "cold launch to unlock screen".
+    // Prints only when ENVVAULT_PERF is set; no-op otherwise.
+    crate::perf_checkpoint("first vault_status (UI mounted)");
     let vault_path = vault::default_vault_path()?;
     let session = state.session();
     Ok(VaultStatus {

@@ -44,7 +44,13 @@ export function VaultBackupDialog({ open: isOpen, onClose }: VaultBackupDialogPr
 
   async function exportBackup() {
     setError(null);
-    const date = new Date().toISOString().slice(0, 10);
+    // Local date, not toISOString() — UTC can already be tomorrow.
+    const now = new Date();
+    const date = [
+      now.getFullYear(),
+      String(now.getMonth() + 1).padStart(2, "0"),
+      String(now.getDate()).padStart(2, "0"),
+    ].join("-");
     let destPath: string | null;
     try {
       destPath = await save({

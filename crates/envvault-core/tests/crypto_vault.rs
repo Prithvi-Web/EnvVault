@@ -353,20 +353,130 @@ fn vault_file_leaks_no_plaintext() {
     }
 }
 
+/// `CreatedVault`'s Debug must never print the recovery key.
+#[test]
+fn created_vault_debug_redacts_the_recovery_key() {
+    use envvault_core::secrecy::ExposeSecret;
+    let dir = tempfile::tempdir().unwrap();
+    let (_path, created) = seeded_vault(dir.path(), true);
+    let printed = format!("{created:?}");
+    assert!(printed.contains("[REDACTED]"));
+    let key = created.recovery_key.as_ref().unwrap().expose_secret();
+    assert!(!printed.contains(key), "Debug leaked the recovery key");
+}
+
+/// The dev-only vault-dir override works, and without it the vault resolves
+/// into the OS app-data directory — never a relative or project path.
+#[test]
+fn default_vault_dir_honors_dev_override_and_falls_back_to_app_data() {
+    use envvault_core::vault::{default_vault_dir, default_vault_path};
+
+    std::env::set_var("ENVVAULT_DEV_VAULT_DIR", "/tmp/envvault-cov-test");
+    assert_eq!(
+        default_vault_path().unwrap(),
+        Path::new("/tmp/envvault-cov-test").join("vault.age")
+    );
+
+    std::env::remove_var("ENVVAULT_DEV_VAULT_DIR");
+    let dir = default_vault_dir().unwrap();
+    assert!(dir.is_absolute());
+    assert!(dir.ends_with("EnvVault"));
+}
+
+/// The production-work-factor entry point (`create_vault`, scrypt N=2^18):
+/// creates a loadable vault and `lock()` consumes the session. Slow by
+/// design (~0.5–1s) — that cost IS the spec'd KDF budget.
+#[test]
+fn production_work_factor_create_and_lock() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("vault.age");
+    let created = create_vault(&path, pw("production factor pw"), false).unwrap();
+    envvault_core::vault::validate_vault_file(&path).unwrap();
+    created.unlocked.lock(); // consumes; every value zeroizes on drop
+}
+
+/// An envelope stitched together from two vaults (someone swapped the
+/// `recipient` field) must be rejected even with the correct password.
+#[test]
+fn stitched_envelope_is_rejected_as_corrupted() {
+    let dir = tempfile::tempdir().unwrap();
+    let (path_a, _a) = seeded_vault(dir.path(), false);
+    let path_b = dir.path().join("other/vault.age");
+    fs::create_dir_all(path_b.parent().unwrap()).unwrap();
+    let created_b =
+        create_vault_with_work_factor(&path_b, pw("other pw"), false, TEST_WORK_FACTOR).unwrap();
+    let recipient_b = created_b.unlocked.recipient().to_string();
+
+    let mut envelope: serde_json::Value =
+        serde_json::from_slice(&fs::read(&path_a).unwrap()).unwrap();
+    envelope["recipient"] = serde_json::Value::String(recipient_b);
+    fs::write(&path_a, serde_json::to_vec(&envelope).unwrap()).unwrap();
+
+    let err = unlock_vault(&path_a, pw("correct horse battery staple")).unwrap_err();
+    assert!(
+        matches!(err, CoreError::VaultCorrupted { .. }),
+        "stitched envelope must fail closed, got {err:?}"
+    );
+}
+
 /// Run manually for the phase gate:
-/// `cargo test -p envvault-core measure_unlock_time -- --ignored --nocapture`
-/// Uses the production work factor; spec §4.1 wants ~500ms–1s.
+/// `cargo test --release -p envvault-core measure_unlock_time -- --ignored --nocapture`
+/// Production work factor, 100 secrets — the exact §9 scenario (<1s, and
+/// §4.1 wants the KDF to dominate at ~500ms–1s by design).
 #[test]
 #[ignore]
 fn measure_unlock_time() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("vault.age");
-    create_vault(&path, pw("timing test password"), false).unwrap();
+    let mut created = create_vault(&path, pw("timing test password"), false).unwrap();
+
+    // 100 secrets across 5 projects × 2 environments, spec §9's scenario.
+    for p in 0..5 {
+        let pid = created
+            .unlocked
+            .vault_mut()
+            .add_project(
+                format!("timing-project-{p}"),
+                dir.path().join(format!("p{p}")),
+            )
+            .unwrap();
+        let (dev, prod) = {
+            let proj = created.unlocked.vault().project(pid).unwrap();
+            (proj.environments[0].id, proj.environments[1].id)
+        };
+        for i in 0..10 {
+            for (env, tag) in [(dev, "dev"), (prod, "prod")] {
+                created
+                    .unlocked
+                    .vault_mut()
+                    .add_secret(
+                        pid,
+                        env,
+                        format!("TIMING_{tag}_{i}").to_uppercase(),
+                        SecretValue::new(format!("value-{p}-{tag}-{i}-{}", "x".repeat(40))),
+                        None,
+                    )
+                    .unwrap();
+            }
+        }
+    }
+    created.unlocked.save().unwrap();
+    let total: usize = created
+        .unlocked
+        .vault()
+        .projects
+        .iter()
+        .flat_map(|p| &p.environments)
+        .map(|e| e.secrets.len())
+        .sum();
+    assert_eq!(total, 100);
+    drop(created);
 
     let start = std::time::Instant::now();
-    unlock_vault(&path, pw("timing test password")).unwrap();
+    let unlocked = unlock_vault(&path, pw("timing test password")).unwrap();
     let elapsed = start.elapsed();
-    println!("unlock with scrypt N=2^18 took {elapsed:?}");
+    println!("unlock (scrypt N=2^18, 100 secrets) took {elapsed:?}");
+    drop(unlocked);
     assert!(
         elapsed.as_millis() >= 100,
         "unlock suspiciously fast — is the work factor applied?"

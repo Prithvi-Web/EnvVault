@@ -661,6 +661,81 @@ fn garbage_bundle_file_is_a_clear_error() {
     assert!(String::from_utf8_lossy(&out.stderr).contains("not an age file"));
 }
 
+// ---------------------------------------------------------------------------
+// Security suite §10.3.4 — injection never touches disk
+// ---------------------------------------------------------------------------
+
+/// Recursive file listing (paths + sizes, so an overwrite also shows up).
+fn file_snapshot(root: &Path) -> std::collections::BTreeMap<PathBuf, u64> {
+    let mut out = std::collections::BTreeMap::new();
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                stack.push(path);
+            } else if let Ok(meta) = entry.metadata() {
+                out.insert(path, meta.len());
+            }
+        }
+    }
+    out
+}
+
+/// Spec §10.3.4: after `envvault run`, the filesystem is byte-for-byte as it
+/// was — no `.env`, no temp file, no cache, nothing, in the project dir OR
+/// the vault dir. (Injection goes through the child's process environment
+/// only.) The OS temp dir is shared with other processes, so there the
+/// assertion is scoped to env-file-shaped names.
+#[test]
+fn run_writes_no_file_anywhere() {
+    let f = fixture();
+    let temp_root = std::env::temp_dir();
+
+    let project_before = file_snapshot(&f.project_dir);
+    let vault_before = file_snapshot(&f.vault_dir);
+    let temp_before: std::collections::BTreeSet<std::ffi::OsString> = std::fs::read_dir(&temp_root)
+        .map(|es| es.flatten().map(|e| e.file_name()).collect())
+        .unwrap_or_default();
+
+    let out = envvault(
+        &f,
+        &f.project_dir,
+        &["run", "--password-stdin", "--", "sh", "-c", ":"],
+    );
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    assert_eq!(
+        file_snapshot(&f.project_dir),
+        project_before,
+        "the project directory must be untouched"
+    );
+    assert_eq!(
+        file_snapshot(&f.vault_dir),
+        vault_before,
+        "the vault directory must be untouched by a read-only run"
+    );
+    if let Ok(entries) = std::fs::read_dir(&temp_root) {
+        for entry in entries.flatten() {
+            if temp_before.contains(&entry.file_name()) {
+                continue;
+            }
+            let name = entry.file_name().to_string_lossy().to_lowercase();
+            assert!(
+                !name.contains(".env"),
+                "an env-file-shaped temp file appeared: {name}"
+            );
+        }
+    }
+}
+
 #[test]
 fn status_reports_vault_location() {
     let f = fixture();

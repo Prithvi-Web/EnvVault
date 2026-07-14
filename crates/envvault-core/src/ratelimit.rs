@@ -243,6 +243,56 @@ mod tests {
         assert!(check_at(&vault, 1).is_ok());
     }
 
+    /// The Phase 8 import paths must share the unlock throttle: a wrong
+    /// password through `update_vault_guarded` or
+    /// `unwrap_vault_identity_guarded` counts a failure, and a correct one
+    /// clears the counter.
+    #[test]
+    fn guarded_update_and_identity_unwrap_share_the_throttle() {
+        use age::secrecy::SecretString;
+        let dir = tempfile::tempdir().unwrap();
+        let vault = dir.path().join("vault.age");
+        crate::vault::create_vault_with_work_factor(
+            &vault,
+            SecretString::from("right".to_owned()),
+            false,
+            10,
+        )
+        .unwrap();
+
+        let err = update_vault_guarded(&vault, SecretString::from("wrong".to_owned()), |_| Ok(()))
+            .unwrap_err();
+        match err {
+            CoreError::WrongPassword { attempts_remaining } => {
+                assert_eq!(attempts_remaining, Some(9))
+            }
+            other => panic!("expected WrongPassword, got {other:?}"),
+        }
+        // The identity unwrap is throttled by the same counter: immediately
+        // retrying — even with the RIGHT password — is rate-limited.
+        match unwrap_vault_identity_guarded(&vault, &SecretString::from("right".to_owned())) {
+            Err(CoreError::RateLimited { .. }) => {}
+            Err(other) => panic!("expected RateLimited, got {other:?}"),
+            Ok(_) => panic!("throttle must block the immediate retry"),
+        }
+
+        // After the 1s backoff, a correct password succeeds and clears it.
+        std::thread::sleep(std::time::Duration::from_millis(1100));
+        let identity =
+            unwrap_vault_identity_guarded(&vault, &SecretString::from("right".to_owned())).unwrap();
+        drop(identity);
+        assert!(
+            !throttle_path(&vault).exists(),
+            "success must clear the counter"
+        );
+
+        let value = update_vault_guarded(&vault, SecretString::from("right".to_owned()), |v| {
+            Ok(v.projects.len())
+        })
+        .unwrap();
+        assert_eq!(value, 0);
+    }
+
     #[test]
     fn guarded_unlock_counts_failures_and_reports_remaining() {
         let dir = tempfile::tempdir().unwrap();

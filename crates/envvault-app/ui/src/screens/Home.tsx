@@ -41,6 +41,7 @@ import { ShareDialog } from "./home/ShareDialog";
 import { ImportBundleDialog } from "./home/ImportBundleDialog";
 import { VaultBackupDialog } from "./home/VaultBackupDialog";
 import { ShareKeyDialog } from "./home/ShareKeyDialog";
+import { AboutDialog } from "./home/AboutDialog";
 
 export default function Home() {
   const { viaRecovery, autoLockMinutes, appVersion, refresh, markLocked, loadProjects } =
@@ -71,6 +72,7 @@ export default function Home() {
   const [importBundleOpen, setImportBundleOpen] = useState(false);
   const [backupOpen, setBackupOpen] = useState(false);
   const [shareKeyOpen, setShareKeyOpen] = useState(false);
+  const [aboutOpen, setAboutOpen] = useState(false);
   const searchRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -111,24 +113,29 @@ export default function Home() {
     setFilter("");
   }, [project?.id, selectedEnvId]);
 
-  const anyDialogOpen =
+  const modalOpen =
     secretDialog !== null ||
     addProjectOpen ||
     addEnvOpen ||
-    paletteOpen ||
     deleteSecret !== null ||
     deleteProject !== null ||
     deleteEnv !== null ||
     shareOpen ||
     importBundleOpen ||
     backupOpen ||
-    shareKeyOpen;
+    shareKeyOpen ||
+    aboutOpen;
+  const anyDialogOpen = modalOpen || paletteOpen;
 
   // Global keys. Typing contexts and open dialogs swallow single-letter keys.
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
         e.preventDefault();
+        // Never open the palette over a modal — it would fight the modal's
+        // focus trap (the palette input can't take focus and outside clicks
+        // are swallowed). ⌘K still closes an open palette.
+        if (modalOpen) return;
         setPaletteOpen((o) => !o);
         return;
       }
@@ -150,7 +157,7 @@ export default function Home() {
     }
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [anyDialogOpen, project, env]);
+  }, [anyDialogOpen, modalOpen, project, env]);
 
   async function lock() {
     const result = await commands.lockVault();
@@ -396,12 +403,14 @@ export default function Home() {
         onImportBundle={() => setImportBundleOpen(true)}
         onVaultBackup={() => setBackupOpen(true)}
         onShareKey={() => setShareKeyOpen(true)}
+        onAbout={() => setAboutOpen(true)}
       />
 
       <ShareDialog open={shareOpen} onClose={() => setShareOpen(false)} />
       <ImportBundleDialog open={importBundleOpen} onClose={() => setImportBundleOpen(false)} />
       <VaultBackupDialog open={backupOpen} onClose={() => setBackupOpen(false)} />
       <ShareKeyDialog open={shareKeyOpen} onClose={() => setShareKeyOpen(false)} />
+      <AboutDialog open={aboutOpen} onClose={() => setAboutOpen(false)} />
 
       <ConfirmDialog
         open={deleteSecret !== null}

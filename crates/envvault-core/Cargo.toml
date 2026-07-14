@@ -31,3 +31,5 @@ specta = ["dep:specta"]
 tempfile = "3"
 proptest = "1"
 filetime = "0.2"
+# Compile-time proofs in tests/security.rs (e.g. SecretValue has no Display).
+static_assertions = "1"

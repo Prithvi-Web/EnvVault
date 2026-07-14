@@ -144,6 +144,14 @@ mod tests {
     }
 
     #[test]
+    fn length_helpers_do_not_expose() {
+        let s = SecretValue::new("abcdef".into());
+        assert_eq!(s.len(), 6);
+        assert!(!s.is_empty());
+        assert!(SecretValue::new(String::new()).is_empty());
+    }
+
+    #[test]
     fn equality_is_by_value() {
         let a = SecretValue::new("same".into());
         let b = SecretValue::new("same".into());
