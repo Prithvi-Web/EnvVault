@@ -23,6 +23,7 @@ pub mod project;
 pub mod ratelimit;
 pub mod scanner;
 pub mod secret;
+pub mod share;
 pub mod vault;
 
 pub use error::CoreError;

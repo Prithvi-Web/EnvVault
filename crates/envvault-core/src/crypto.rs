@@ -63,6 +63,39 @@ pub fn generate_identity() -> x25519::Identity {
     x25519::Identity::generate()
 }
 
+/// Encrypt to an scrypt passphrase recipient. Returns an ASCII-armored age
+/// file. Used for the wrapped vault identity and passphrase share bundles.
+pub fn encrypt_with_passphrase(
+    plaintext: &[u8],
+    passphrase: &SecretString,
+    work_factor_log_n: u8,
+) -> Result<String, CryptoError> {
+    let mut recipient = age::scrypt::Recipient::new(passphrase.clone());
+    recipient.set_work_factor(work_factor_log_n);
+    encrypt_armored(plaintext, iter::once(&recipient as &dyn age::Recipient))
+}
+
+/// Decrypt scrypt-passphrase age data (armored or binary). A failed
+/// decryption is reported as [`CryptoError::WrongPassphrase`] — with an AEAD,
+/// a wrong passphrase and a tampered file are indistinguishable, and we fail
+/// closed either way.
+pub fn decrypt_with_passphrase(
+    data: &[u8],
+    passphrase: &SecretString,
+) -> Result<Zeroizing<Vec<u8>>, CryptoError> {
+    let mut scrypt_id = age::scrypt::Identity::new(passphrase.clone());
+    scrypt_id.set_max_work_factor(MAX_ACCEPTED_WORK_FACTOR_LOG_N);
+
+    decrypt_bytes(data, &scrypt_id).map_err(|e| match e {
+        CryptoError::Corrupted(reason)
+            if reason.contains("decryption failed") || reason.contains("no matching keys") =>
+        {
+            CryptoError::WrongPassphrase
+        }
+        other => other,
+    })
+}
+
 /// Encrypt the vault identity under the master password (age + scrypt).
 /// Returns an ASCII-armored age file as a string.
 pub fn wrap_identity(
@@ -70,11 +103,8 @@ pub fn wrap_identity(
     passphrase: &SecretString,
     work_factor_log_n: u8,
 ) -> Result<String, CryptoError> {
-    let mut recipient = age::scrypt::Recipient::new(passphrase.clone());
-    recipient.set_work_factor(work_factor_log_n);
-
     let plaintext = Zeroizing::new(identity.to_string().expose_secret().as_bytes().to_vec());
-    encrypt_armored(&plaintext, iter::once(&recipient as &dyn age::Recipient))
+    encrypt_with_passphrase(&plaintext, passphrase, work_factor_log_n)
 }
 
 /// Decrypt the wrapped vault identity with the master password.
@@ -82,19 +112,7 @@ pub fn unwrap_identity(
     armored: &str,
     passphrase: &SecretString,
 ) -> Result<x25519::Identity, CryptoError> {
-    let mut scrypt_id = age::scrypt::Identity::new(passphrase.clone());
-    scrypt_id.set_max_work_factor(MAX_ACCEPTED_WORK_FACTOR_LOG_N);
-
-    let bytes = decrypt_armored(armored, &scrypt_id).map_err(|e| match e {
-        // Wrong passphrase and tampered-ciphertext are indistinguishable by
-        // design; fail closed as WrongPassphrase (never partial plaintext).
-        CryptoError::Corrupted(reason)
-            if reason.contains("decryption failed") || reason.contains("no matching keys") =>
-        {
-            CryptoError::WrongPassphrase
-        }
-        other => other,
-    })?;
+    let bytes = decrypt_with_passphrase(armored.as_bytes(), passphrase)?;
 
     let text = Zeroizing::new(
         String::from_utf8(bytes.to_vec())
@@ -103,6 +121,36 @@ pub fn unwrap_identity(
     text.trim()
         .parse::<x25519::Identity>()
         .map_err(|e| CryptoError::Corrupted(format!("wrapped identity invalid: {e}")))
+}
+
+/// Encrypt to a list of already-parsed recipients of any kind (X25519, SSH).
+/// Share bundles use this; the enum in `share.rs` guarantees scrypt and
+/// key recipients are never mixed (age forbids that combination).
+pub fn encrypt_to_parsed_recipients(
+    plaintext: &[u8],
+    recipients: &[Box<dyn age::Recipient + Send>],
+) -> Result<String, CryptoError> {
+    encrypt_armored(
+        plaintext,
+        recipients.iter().map(|r| r.as_ref() as &dyn age::Recipient),
+    )
+}
+
+/// Decrypt age data (armored or binary) with any identity. A "no matching
+/// keys" failure is reported as [`CryptoError::WrongPassphrase`] so callers
+/// can distinguish "wrong key" from "damaged file".
+pub fn decrypt_with_identity(
+    data: &[u8],
+    identity: &dyn age::Identity,
+) -> Result<Zeroizing<Vec<u8>>, CryptoError> {
+    decrypt_bytes(data, identity).map_err(|e| match e {
+        CryptoError::Corrupted(reason)
+            if reason.contains("decryption failed") || reason.contains("no matching keys") =>
+        {
+            CryptoError::WrongPassphrase
+        }
+        other => other,
+    })
 }
 
 /// Encrypt the serialized vault payload to one or more X25519 recipients.
@@ -122,7 +170,7 @@ pub fn decrypt_payload(
     armored: &str,
     identity: &x25519::Identity,
 ) -> Result<Zeroizing<Vec<u8>>, CryptoError> {
-    decrypt_armored(armored, identity)
+    decrypt_bytes(armored.as_bytes(), identity)
 }
 
 fn encrypt_armored<'a>(
@@ -143,12 +191,11 @@ fn encrypt_armored<'a>(
     String::from_utf8(bytes).map_err(|_| CryptoError::Corrupted("armor is not UTF-8".into()))
 }
 
-fn decrypt_armored(
-    armored: &str,
+fn decrypt_bytes(
+    data: &[u8],
     identity: &dyn age::Identity,
 ) -> Result<Zeroizing<Vec<u8>>, CryptoError> {
-    let decryptor =
-        Decryptor::new_buffered(ArmoredReader::new(armored.as_bytes())).map_err(map_decrypt)?;
+    let decryptor = Decryptor::new_buffered(ArmoredReader::new(data)).map_err(map_decrypt)?;
     let mut reader = decryptor
         .decrypt(iter::once(identity))
         .map_err(map_decrypt)?;

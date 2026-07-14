@@ -10,6 +10,7 @@ import {
   LockOpen,
   Plus,
   Search,
+  Share2,
   Shield,
   ShieldOff,
 } from "lucide-react";
@@ -36,6 +37,10 @@ import { HealthDashboard } from "./home/HealthDashboard";
 import { AddProjectDialog } from "./home/AddProjectDialog";
 import { AddEnvDialog } from "./home/AddEnvDialog";
 import { CommandPalette } from "./home/CommandPalette";
+import { ShareDialog } from "./home/ShareDialog";
+import { ImportBundleDialog } from "./home/ImportBundleDialog";
+import { VaultBackupDialog } from "./home/VaultBackupDialog";
+import { ShareKeyDialog } from "./home/ShareKeyDialog";
 
 export default function Home() {
   const { viaRecovery, autoLockMinutes, appVersion, refresh, markLocked, loadProjects } =
@@ -62,6 +67,10 @@ export default function Home() {
   const [importFiles, setImportFiles] = useState<EnvFileCandidate[] | null>(null);
   const [guardEnabled, setGuardEnabled] = useState(true);
   const [view, setView] = useState<"secrets" | "health">("secrets");
+  const [shareOpen, setShareOpen] = useState(false);
+  const [importBundleOpen, setImportBundleOpen] = useState(false);
+  const [backupOpen, setBackupOpen] = useState(false);
+  const [shareKeyOpen, setShareKeyOpen] = useState(false);
   const searchRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -109,7 +118,11 @@ export default function Home() {
     paletteOpen ||
     deleteSecret !== null ||
     deleteProject !== null ||
-    deleteEnv !== null;
+    deleteEnv !== null ||
+    shareOpen ||
+    importBundleOpen ||
+    backupOpen ||
+    shareKeyOpen;
 
   // Global keys. Typing contexts and open dialogs swallow single-letter keys.
   useEffect(() => {
@@ -291,6 +304,19 @@ export default function Home() {
                       style={{ height: 30 }}
                     />
                   </div>
+                  <Button
+                    variant="ghost"
+                    title={
+                      (env?.secretCount ?? 0) > 0
+                        ? `Share ${env?.name ?? "this environment"} as an encrypted bundle`
+                        : "Nothing to share — this environment has no secrets"
+                    }
+                    disabled={(env?.secretCount ?? 0) === 0}
+                    onClick={() => setShareOpen(true)}
+                  >
+                    <Share2 size={14} />
+                    Share
+                  </Button>
                   <Button onClick={() => setSecretDialog({ mode: "new" })}>
                     <Plus size={14} />
                     New secret
@@ -366,7 +392,16 @@ export default function Home() {
         onAddProject={() => setAddProjectOpen(true)}
         onAddEnv={() => setAddEnvOpen(true)}
         onShowHealth={() => setView("health")}
+        onShareEnv={env && (env.secretCount ?? 0) > 0 ? () => setShareOpen(true) : null}
+        onImportBundle={() => setImportBundleOpen(true)}
+        onVaultBackup={() => setBackupOpen(true)}
+        onShareKey={() => setShareKeyOpen(true)}
       />
+
+      <ShareDialog open={shareOpen} onClose={() => setShareOpen(false)} />
+      <ImportBundleDialog open={importBundleOpen} onClose={() => setImportBundleOpen(false)} />
+      <VaultBackupDialog open={backupOpen} onClose={() => setBackupOpen(false)} />
+      <ShareKeyDialog open={shareKeyOpen} onClose={() => setShareKeyOpen(false)} />
 
       <ConfirmDialog
         open={deleteSecret !== null}

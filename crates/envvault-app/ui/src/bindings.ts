@@ -70,6 +70,56 @@ export const commands = {
 	 *  the boundary — only names and finding metadata.
 	 */
 	healthReport: () => typedError<HealthReport, AppError>(__TAURI_INVOKE("health_report")),
+	/**
+	 *  This vault's share key — its X25519 public key. Teammates encrypt bundles
+	 *  to it; safe to display and copy anywhere.
+	 */
+	shareKey: () => typedError<string, AppError>(__TAURI_INVOKE("share_key")),
+	/**
+	 *  Export one environment as an encrypted share bundle. Exactly one of
+	 *  `passphrase` / `recipient_keys` must be provided (age forbids mixing).
+	 */
+	exportShareBundle: (projectId: string, envId: string, passphrase: string | null, recipientKeys: string[], expiresInHours: number | null, destPath: string) => typedError<null, AppError>(__TAURI_INVOKE("export_share_bundle", { projectId, envId, passphrase, recipientKeys, expiresInHours, destPath })),
+	/**
+	 *  What kind of credential opens this bundle file — read from the age header
+	 *  without decrypting anything.
+	 */
+	inspectShareBundle: (path: string) => typedError<ShareBundleKind, AppError>(__TAURI_INVOKE("inspect_share_bundle", { path })),
+	/**
+	 *  Decrypt a bundle and hold it in Rust as the pending import. Only metadata
+	 *  crosses to the UI (DTO rule §4.3) — the values stay here until confirm.
+	 *  `passphrase` opens passphrase bundles; `master_password` unwraps the vault
+	 *  identity for key bundles (rate-limited like any password attempt).
+	 */
+	previewShareImport: (path: string, passphrase: string | null, masterPassword: string | null) => typedError<SharePreview, AppError>(__TAURI_INVOKE("preview_share_import", { path, passphrase, masterPassword })),
+	/**
+	 *  Apply the pending bundle to the chosen project — into an existing
+	 *  environment (`env_id`) or a new one (`new_env_name`). The pending bundle
+	 *  is kept on failure so the user can retry without re-entering credentials.
+	 */
+	confirmShareImport: (projectId: string, envId: string | null, newEnvName: string | null) => typedError<ShareImportResult, AppError>(__TAURI_INVOKE("confirm_share_import", { projectId, envId, newEnvName })),
+	/**  Drop the pending bundle (zeroizing its values) without importing. */
+	cancelShareImport: () => __TAURI_INVOKE<void>("cancel_share_import"),
+	/**
+	 *  Write a copy of the encrypted vault file to `dest_path`. It is already
+	 *  ciphertext — safe for Dropbox, USB sticks, anywhere.
+	 */
+	exportVaultBackup: (destPath: string) => typedError<null, AppError>(__TAURI_INVOKE("export_vault_backup", { destPath })),
+	/**
+	 *  Merge another EnvVault file into the open vault. Needs the password of
+	 *  the file being imported (it has its own). Deliberately unthrottled: the
+	 *  user supplies both the file and its password, so there is nothing of
+	 *  theirs to protect with a lockout — and a throttle sidecar would litter
+	 *  the folder the file came from.
+	 */
+	importVaultMerge: (path: string, password: string) => typedError<VaultMergeResult, AppError>(__TAURI_INVOKE("import_vault_merge", { path, password })),
+	/**
+	 *  Replace the live vault with another EnvVault file. The session is locked
+	 *  FIRST so no in-memory state can overwrite the imported file, then the
+	 *  swap happens atomically with the previous vault kept in the rolling
+	 *  backups. Afterwards the vault opens with the imported file's password.
+	 */
+	importVaultReplace: (path: string) => typedError<null, AppError>(__TAURI_INVOKE("import_vault_replace", { path })),
 };
 
 /** Events */
@@ -104,7 +154,14 @@ export type AppError = { kind: "VaultLocked" } | { kind: "WrongPassword"; detail
 	message: string,
 } } | { kind: "StaleId" } | { kind: "IoError"; detail: {
 	message: string,
-} } | { kind: "NoDataDir" };
+} } | { kind: "NoDataDir" } | { kind: "BundleExpired"; detail: {
+	/**  RFC 3339 timestamp of when the bundle expired. */
+	expiredAt: string,
+} } | { kind: "BundleInvalid"; detail: {
+	message: string,
+} } | { kind: "BundleWrongKey" } | { kind: "InvalidRecipientKey"; detail: {
+	message: string,
+} };
 
 export type CreatedVaultInfo = {
 	/**
@@ -241,6 +298,32 @@ export type SecretMeta = {
 	valueLength: number,
 };
 
+export type ShareBundleKind = "passphrase" | "recipientKeys";
+
+export type ShareImportResult = {
+	projectName: string,
+	environmentName: string,
+	createdEnvironment: boolean,
+	added: string[],
+	updated: string[],
+	unchangedCount: number,
+};
+
+export type SharePreview = {
+	projectName: string,
+	environmentName: string,
+	isProduction: boolean,
+	createdAt: string,
+	expiresAt: string | null,
+	entries: SharePreviewEntry[],
+};
+
+export type SharePreviewEntry = {
+	key: string,
+	valueLength: number,
+	detectedLabel: string | null,
+};
+
 export type UnlockOutcome = {
 	/**
 	 *  True when the recovery key (not the master password) opened the
@@ -260,6 +343,13 @@ export type VaultLockedEvent = {
 	 *  hooks.
 	 */
 	reason: string,
+};
+
+export type VaultMergeResult = {
+	projectsAdded: number,
+	environmentsAdded: number,
+	secretsAdded: number,
+	secretsUpdated: number,
 };
 
 export type VaultStatus = {

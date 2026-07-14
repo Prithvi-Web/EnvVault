@@ -747,6 +747,332 @@ pub fn set_project_guard_enabled(
 }
 
 // ---------------------------------------------------------------------------
+// Phase 8: Secure Share (spec F8)
+// ---------------------------------------------------------------------------
+
+/// This vault's share key — its X25519 public key. Teammates encrypt bundles
+/// to it; safe to display and copy anywhere.
+#[tauri::command]
+#[specta::specta]
+pub fn share_key(state: State<'_, AppState>) -> Result<String, AppError> {
+    let guard = state.session();
+    let session = guard.as_ref().ok_or(AppError::VaultLocked)?;
+    state.touch();
+    Ok(session.recipient().to_string())
+}
+
+/// Export one environment as an encrypted share bundle. Exactly one of
+/// `passphrase` / `recipient_keys` must be provided (age forbids mixing).
+#[tauri::command]
+#[specta::specta]
+pub async fn export_share_bundle(
+    state: State<'_, AppState>,
+    project_id: Uuid,
+    env_id: Uuid,
+    passphrase: Option<String>,
+    recipient_keys: Vec<String>,
+    expires_in_hours: Option<u32>,
+    dest_path: String,
+) -> Result<(), AppError> {
+    use envvault_core::share::{self, ShareProtection};
+
+    let protection = match (passphrase, recipient_keys.is_empty()) {
+        (Some(p), true) => ShareProtection::Passphrase(SecretString::from(p)),
+        (None, false) => ShareProtection::RecipientKeys(recipient_keys),
+        _ => {
+            return Err(AppError::InvalidInput {
+                message: "choose either a passphrase or recipient keys".into(),
+            })
+        }
+    };
+
+    // Snapshot the bundle under the session guard, then do the slow part
+    // (scrypt + file write) on a blocking thread with no locks held.
+    let bundle = read_session(&state, |vault| {
+        share::bundle_from_environment(vault, project_id, env_id, expires_in_hours, Utc::now())
+    })?;
+
+    tauri::async_runtime::spawn_blocking(move || -> Result<(), AppError> {
+        let armored = share::seal_bundle(&bundle, &protection)?;
+        let dest = std::path::Path::new(&dest_path);
+        std::fs::write(dest, armored.as_bytes()).map_err(|e| AppError::IoError {
+            message: format!("could not write {dest_path}: {e}"),
+        })?;
+        Ok(())
+    })
+    .await
+    .map_err(AppError::from_join)?
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub enum ShareBundleKind {
+    Passphrase,
+    RecipientKeys,
+}
+
+/// What kind of credential opens this bundle file — read from the age header
+/// without decrypting anything.
+#[tauri::command]
+#[specta::specta]
+pub fn inspect_share_bundle(path: String) -> Result<ShareBundleKind, AppError> {
+    let data = std::fs::read(&path).map_err(|e| AppError::IoError {
+        message: format!("could not read the bundle file: {e}"),
+    })?;
+    Ok(
+        match envvault_core::share::inspect_bundle(&data).map_err(AppError::from)? {
+            envvault_core::share::BundleKind::Passphrase => ShareBundleKind::Passphrase,
+            envvault_core::share::BundleKind::RecipientKeys => ShareBundleKind::RecipientKeys,
+        },
+    )
+}
+
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct SharePreviewEntry {
+    pub key: String,
+    pub value_length: u32,
+    pub detected_label: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct SharePreview {
+    pub project_name: String,
+    pub environment_name: String,
+    pub is_production: bool,
+    pub created_at: DateTime<Utc>,
+    pub expires_at: Option<DateTime<Utc>>,
+    pub entries: Vec<SharePreviewEntry>,
+}
+
+/// Decrypt a bundle and hold it in Rust as the pending import. Only metadata
+/// crosses to the UI (DTO rule §4.3) — the values stay here until confirm.
+/// `passphrase` opens passphrase bundles; `master_password` unwraps the vault
+/// identity for key bundles (rate-limited like any password attempt).
+#[tauri::command]
+#[specta::specta]
+pub async fn preview_share_import(
+    state: State<'_, AppState>,
+    path: String,
+    passphrase: Option<String>,
+    master_password: Option<String>,
+) -> Result<SharePreview, AppError> {
+    use envvault_core::share::{self, BundleKind};
+
+    let data = std::fs::read(&path).map_err(|e| AppError::IoError {
+        message: format!("could not read the bundle file: {e}"),
+    })?;
+    let kind = share::inspect_bundle(&data)?;
+
+    let bundle =
+        tauri::async_runtime::spawn_blocking(move || -> Result<share::ShareBundle, AppError> {
+            match kind {
+                BundleKind::Passphrase => {
+                    let passphrase = passphrase.ok_or(AppError::InvalidInput {
+                        message: "this bundle needs its passphrase".into(),
+                    })?;
+                    Ok(share::open_bundle_with_passphrase(
+                        &data,
+                        &SecretString::from(passphrase),
+                        Utc::now(),
+                    )?)
+                }
+                BundleKind::RecipientKeys => {
+                    let master = master_password.ok_or(AppError::InvalidInput {
+                        message: "enter your master password to decrypt this bundle".into(),
+                    })?;
+                    let vault_path = vault::default_vault_path()?;
+                    let identity = envvault_core::ratelimit::unwrap_vault_identity_guarded(
+                        &vault_path,
+                        &SecretString::from(master),
+                    )?;
+                    Ok(share::open_bundle_with_identity(
+                        &data,
+                        &identity,
+                        Utc::now(),
+                    )?)
+                }
+            }
+        })
+        .await
+        .map_err(AppError::from_join)??;
+
+    let preview = SharePreview {
+        project_name: bundle.project_name.clone(),
+        environment_name: bundle.environment_name.clone(),
+        is_production: bundle.is_production,
+        created_at: bundle.created_at,
+        expires_at: bundle.expires_at,
+        entries: bundle
+            .secrets
+            .iter()
+            .map(|s| SharePreviewEntry {
+                key: s.key.clone(),
+                value_length: s.value.len() as u32,
+                detected_label: envvault_core::detect::detect(&s.key, s.value.expose())
+                    .map(|t| envvault_core::detect::label(t).to_string()),
+            })
+            .collect(),
+    };
+    state.set_pending_share(bundle);
+    state.touch();
+    Ok(preview)
+}
+
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct ShareImportResult {
+    pub project_name: String,
+    pub environment_name: String,
+    pub created_environment: bool,
+    pub added: Vec<String>,
+    pub updated: Vec<String>,
+    pub unchanged_count: u32,
+}
+
+/// Apply the pending bundle to the chosen project — into an existing
+/// environment (`env_id`) or a new one (`new_env_name`). The pending bundle
+/// is kept on failure so the user can retry without re-entering credentials.
+#[tauri::command]
+#[specta::specta]
+pub fn confirm_share_import(
+    state: State<'_, AppState>,
+    project_id: Uuid,
+    env_id: Option<Uuid>,
+    new_env_name: Option<String>,
+) -> Result<ShareImportResult, AppError> {
+    use envvault_core::share;
+
+    // Clone (still zeroizing) so a failed save keeps the pending bundle
+    // intact for a retry without re-entering credentials.
+    let bundle = state
+        .pending_share()
+        .as_ref()
+        .cloned()
+        .ok_or(AppError::InvalidInput {
+            message: "no bundle is waiting to be imported — open one first".into(),
+        })?;
+    // A bundle can cross its deadline between preview and confirm.
+    bundle.check_expiry(Utc::now())?;
+
+    let result = mutate_and_save(&state, |vault| {
+        let project_name = vault.project(project_id)?.name.clone();
+        let (env_id, created) = match (env_id, &new_env_name) {
+            (Some(id), _) => (id, false),
+            (None, Some(name)) => {
+                // A new environment takes the bundle's production flag only
+                // when it IS the bundle's environment — never guess.
+                let is_prod =
+                    name.eq_ignore_ascii_case(&bundle.environment_name) && bundle.is_production;
+                (
+                    vault.add_environment(project_id, name.clone(), is_prod)?,
+                    true,
+                )
+            }
+            (None, None) => {
+                return Err(envvault_core::CoreError::InvalidInput(
+                    "choose an environment".into(),
+                ))
+            }
+        };
+        let report = share::apply_bundle(vault, project_id, env_id, &bundle)?;
+        let env = vault
+            .project(project_id)?
+            .environments
+            .iter()
+            .find(|e| e.id == env_id)
+            .ok_or(envvault_core::CoreError::StaleId)?;
+        Ok(ShareImportResult {
+            project_name,
+            environment_name: env.name.clone(),
+            created_environment: created,
+            added: report.added,
+            updated: report.updated,
+            unchanged_count: report.unchanged.len() as u32,
+        })
+    })?;
+
+    state.clear_pending_share();
+    Ok(result)
+}
+
+/// Drop the pending bundle (zeroizing its values) without importing.
+#[tauri::command]
+#[specta::specta]
+pub fn cancel_share_import(state: State<'_, AppState>) {
+    state.clear_pending_share();
+}
+
+// ---------------------------------------------------------------------------
+// Phase 8: vault backup & portability (spec F9)
+// ---------------------------------------------------------------------------
+
+/// Write a copy of the encrypted vault file to `dest_path`. It is already
+/// ciphertext — safe for Dropbox, USB sticks, anywhere.
+#[tauri::command]
+#[specta::specta]
+pub fn export_vault_backup(state: State<'_, AppState>, dest_path: String) -> Result<(), AppError> {
+    let vault_path = vault::default_vault_path()?;
+    vault::export_vault_copy(&vault_path, std::path::Path::new(&dest_path))?;
+    state.touch();
+    Ok(())
+}
+
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct VaultMergeResult {
+    pub projects_added: u32,
+    pub environments_added: u32,
+    pub secrets_added: u32,
+    pub secrets_updated: u32,
+}
+
+/// Merge another EnvVault file into the open vault. Needs the password of
+/// the file being imported (it has its own). Deliberately unthrottled: the
+/// user supplies both the file and its password, so there is nothing of
+/// theirs to protect with a lockout — and a throttle sidecar would litter
+/// the folder the file came from.
+#[tauri::command]
+#[specta::specta]
+pub async fn import_vault_merge(
+    state: State<'_, AppState>,
+    path: String,
+    password: String,
+) -> Result<VaultMergeResult, AppError> {
+    let source = tauri::async_runtime::spawn_blocking(move || -> Result<Vault, AppError> {
+        let unlocked =
+            vault::unlock_vault(std::path::Path::new(&path), SecretString::from(password))?;
+        Ok(unlocked.vault().clone())
+    })
+    .await
+    .map_err(AppError::from_join)??;
+
+    let report = mutate_and_save(&state, |vault| Ok(vault.merge_from(source)))?;
+    Ok(VaultMergeResult {
+        projects_added: report.projects_added,
+        environments_added: report.environments_added,
+        secrets_added: report.secrets_added,
+        secrets_updated: report.secrets_updated,
+    })
+}
+
+/// Replace the live vault with another EnvVault file. The session is locked
+/// FIRST so no in-memory state can overwrite the imported file, then the
+/// swap happens atomically with the previous vault kept in the rolling
+/// backups. Afterwards the vault opens with the imported file's password.
+#[tauri::command]
+#[specta::specta]
+pub fn import_vault_replace(state: State<'_, AppState>, path: String) -> Result<(), AppError> {
+    let vault_path = vault::default_vault_path()?;
+    // Validate before locking the user out of their session for nothing.
+    vault::validate_vault_file(std::path::Path::new(&path))?;
+    state.lock_now();
+    vault::replace_vault_file(&vault_path, std::path::Path::new(&path))?;
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
 // Phase 7: the health dashboard (spec F7)
 // ---------------------------------------------------------------------------
 

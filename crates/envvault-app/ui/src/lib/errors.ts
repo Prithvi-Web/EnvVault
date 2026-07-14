@@ -39,6 +39,14 @@ export function describeError(e: AppError): string {
       return `Something went wrong on disk: ${e.detail.message}`;
     case "NoDataDir":
       return "Could not find this computer's application data folder.";
+    case "BundleExpired":
+      return `This share bundle expired on ${formatDate(e.detail.expiredAt)}. Ask the sender for a fresh one.`;
+    case "BundleInvalid":
+      return `That file is not a valid share bundle: ${e.detail.message}`;
+    case "BundleWrongKey":
+      return "That passphrase or key does not open this bundle. For key-encrypted bundles, the sender must use your share key.";
+    case "InvalidRecipientKey":
+      return `That is not a valid recipient key: ${e.detail.message}`;
     default: {
       const unhandled: never = e;
       return `Unexpected error: ${JSON.stringify(unhandled)}`;
@@ -51,4 +59,17 @@ export function formatSeconds(total: number): string {
   const m = Math.floor(total / 60);
   const s = total % 60;
   return s === 0 ? `${m}m` : `${m}m ${s}s`;
+}
+
+/** RFC 3339 timestamp → local, human-readable date and time. */
+export function formatDate(rfc3339: string): string {
+  const d = new Date(rfc3339);
+  if (Number.isNaN(d.getTime())) return rfc3339;
+  return d.toLocaleString(undefined, {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
 }

@@ -47,6 +47,17 @@ pub enum AppError {
         message: String,
     },
     NoDataDir,
+    BundleExpired {
+        /// RFC 3339 timestamp of when the bundle expired.
+        expired_at: String,
+    },
+    BundleInvalid {
+        message: String,
+    },
+    BundleWrongKey,
+    InvalidRecipientKey {
+        message: String,
+    },
 }
 
 impl AppError {
@@ -87,6 +98,12 @@ impl From<envvault_core::CoreError> for AppError {
             E::InvalidInput(message) => Self::InvalidInput { message },
             E::StaleId => Self::StaleId,
             E::NoDataDir => Self::NoDataDir,
+            E::BundleExpired { expired_at } => Self::BundleExpired {
+                expired_at: expired_at.to_rfc3339(),
+            },
+            E::BundleInvalid(message) => Self::BundleInvalid { message },
+            E::BundleWrongKey => Self::BundleWrongKey,
+            E::InvalidRecipientKey(message) => Self::InvalidRecipientKey { message },
             E::Git(message) => Self::IoError {
                 message: format!("git: {message}"),
             },

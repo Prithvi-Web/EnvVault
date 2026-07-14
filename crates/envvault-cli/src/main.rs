@@ -39,6 +39,13 @@ enum Cmd {
     /// Alias of `run`
     Exec(RunArgs),
 
+    /// Import a share bundle from a teammate into your vault
+    ///
+    /// Accepts an EnvVault share bundle (a standard age file). Secrets are
+    /// added to the target environment; keys that already exist are updated
+    /// when the value differs.
+    Import(ImportArgs),
+
     /// Show where the vault lives and whether it exists
     Status,
 
@@ -65,10 +72,33 @@ struct RunArgs {
     command: Vec<String>,
 }
 
+#[derive(clap::Args)]
+struct ImportArgs {
+    /// Path to the share bundle (.age file)
+    #[arg(value_name = "FILE")]
+    file: PathBuf,
+
+    /// Project to import into — defaults to the project named in the bundle,
+    /// or the project containing the current directory
+    #[arg(long, value_name = "NAME")]
+    project: Option<String>,
+
+    /// Environment to import into — defaults to the environment named in the
+    /// bundle; created if the project doesn't have it yet
+    #[arg(long = "env", value_name = "NAME")]
+    env_name: Option<String>,
+
+    /// Read passwords from stdin — for scripts. First line: master password.
+    /// For passphrase-protected bundles, second line: bundle passphrase.
+    #[arg(long)]
+    password_stdin: bool,
+}
+
 fn main() -> ExitCode {
     let cli = Cli::parse();
     let result = match cli.command {
         Cmd::Run(args) | Cmd::Exec(args) => cmd_run(args),
+        Cmd::Import(args) => cmd_import(args),
         Cmd::Status => cmd_status(),
         Cmd::ShellHook => {
             print!("{}", SHELL_HOOK);
@@ -222,6 +252,216 @@ fn cmd_run(args: RunArgs) -> Result<u32, String> {
         .map_err(|e| format!("failed waiting for {program}: {e}"))?;
 
     Ok(exit_code_of(status))
+}
+
+// ---------------------------------------------------------------------------
+// import
+// ---------------------------------------------------------------------------
+
+fn cmd_import(args: ImportArgs) -> Result<u32, String> {
+    use envvault_core::share::{self, BundleKind};
+
+    let vault_path = vault::default_vault_path().map_err(|e| e.to_string())?;
+    if !vault_path.exists() {
+        return Err(format!(
+            "no vault exists yet at {} — open the EnvVault app to create one",
+            vault_path.display()
+        ));
+    }
+
+    let data = std::fs::read(&args.file)
+        .map_err(|e| format!("could not read {}: {e}", args.file.display()))?;
+    let kind = share::inspect_bundle(&data).map_err(|e| e.to_string())?;
+
+    // Passwords: interactively via prompts, or via stdin for scripts
+    // (line 1 = master password, line 2 = bundle passphrase when needed).
+    let (master, bundle_passphrase) = if args.password_stdin {
+        let mut buf = String::new();
+        std::io::stdin()
+            .read_to_string(&mut buf)
+            .map_err(|e| format!("could not read passwords from stdin: {e}"))?;
+        let mut lines = buf.lines();
+        let master = SecretString::from(lines.next().unwrap_or("").to_string());
+        let bundle_pass = match kind {
+            BundleKind::Passphrase => Some(SecretString::from(
+                lines
+                    .next()
+                    .ok_or("this bundle needs a passphrase: pass it as the second stdin line")?
+                    .to_string(),
+            )),
+            BundleKind::RecipientKeys => None,
+        };
+        (master, bundle_pass)
+    } else {
+        let master = rpassword::prompt_password("EnvVault master password: ")
+            .map(SecretString::from)
+            .map_err(|e| format!("could not read password: {e}"))?;
+        let bundle_pass = match kind {
+            BundleKind::Passphrase => Some(
+                rpassword::prompt_password("Share bundle passphrase: ")
+                    .map(SecretString::from)
+                    .map_err(|e| format!("could not read passphrase: {e}"))?,
+            ),
+            BundleKind::RecipientKeys => None,
+        };
+        (master, bundle_pass)
+    };
+
+    let now = chrono::Utc::now();
+    let bundle = match kind {
+        BundleKind::Passphrase => {
+            // Checked above; unreachable-by-construction fallback stays safe.
+            let passphrase = bundle_passphrase
+                .as_ref()
+                .ok_or("this bundle needs a passphrase")?;
+            share::open_bundle_with_passphrase(&data, passphrase, now)
+                .map_err(friendly_bundle_error)?
+        }
+        BundleKind::RecipientKeys => {
+            // The bundle was encrypted to a public key — try this vault's
+            // share key by unwrapping the vault identity (rate-limited: this
+            // is a master-password attempt).
+            let identity =
+                envvault_core::ratelimit::unwrap_vault_identity_guarded(&vault_path, &master)
+                    .map_err(friendly_unlock_error)?;
+            share::open_bundle_with_identity(&data, &identity, now)
+                .map_err(friendly_bundle_error)?
+        }
+    };
+
+    let cwd = std::env::current_dir().ok();
+    let outcome = envvault_core::ratelimit::update_vault_guarded(&vault_path, master, |v| {
+        let project_id = resolve_import_project(v, &args, &bundle, cwd.as_deref())?;
+        let env_name = args
+            .env_name
+            .clone()
+            .unwrap_or_else(|| bundle.environment_name.clone());
+
+        let project = v.project(project_id)?;
+        let project_name = project.name.clone();
+        let existing_env = project
+            .environments
+            .iter()
+            .find(|e| e.name.eq_ignore_ascii_case(&env_name))
+            .map(|e| (e.id, e.name.clone(), e.is_production));
+
+        let (env_id, env_name, is_production, created_env) = match existing_env {
+            Some((id, name, is_prod)) => (id, name, is_prod, false),
+            None => {
+                // A new environment inherits the bundle's production flag
+                // only when it IS the bundle's environment — never guess.
+                let is_prod =
+                    env_name.eq_ignore_ascii_case(&bundle.environment_name) && bundle.is_production;
+                let id = v.add_environment(project_id, env_name.clone(), is_prod)?;
+                (id, env_name, is_prod, true)
+            }
+        };
+
+        let report = share::apply_bundle(v, project_id, env_id, &bundle)?;
+        Ok((project_name, env_name, is_production, created_env, report))
+    })
+    .map_err(friendly_unlock_error)?;
+
+    let (project_name, env_name, is_production, created_env, report) = outcome;
+    eprintln!(
+        "📦 bundle from {} [{}], created {}",
+        bundle.project_name,
+        bundle.environment_name,
+        bundle.created_at.format("%Y-%m-%d"),
+    );
+    if created_env {
+        eprintln!("   created environment {env_name}");
+    }
+    println!(
+        "imported into {project_name} [{env_name}]: {} added, {} updated, {} unchanged",
+        report.added.len(),
+        report.updated.len(),
+        report.unchanged.len()
+    );
+    if is_production {
+        let (prefix, suffix) = if std::io::stderr().is_terminal() {
+            ("\x1b[31m", "\x1b[0m")
+        } else {
+            ("", "")
+        };
+        eprintln!("{prefix}⚠ envvault: these secrets landed in PRODUCTION{suffix}");
+    }
+    Ok(0)
+}
+
+/// Project resolution for `import`, strictest first: an explicit `--project`,
+/// then the bundle's project name, then the project containing the current
+/// directory. Ambiguity is an error, never a guess.
+fn resolve_import_project(
+    vault: &envvault_core::vault::Vault,
+    args: &ImportArgs,
+    bundle: &envvault_core::share::ShareBundle,
+    cwd: Option<&Path>,
+) -> Result<uuid::Uuid, CoreError> {
+    let by_name = |name: &str| -> Vec<uuid::Uuid> {
+        vault
+            .projects
+            .iter()
+            .filter(|p| p.name.eq_ignore_ascii_case(name))
+            .map(|p| p.id)
+            .collect()
+    };
+
+    if let Some(name) = &args.project {
+        return match by_name(name).as_slice() {
+            [id] => Ok(*id),
+            [] => Err(CoreError::InvalidInput(format!(
+                "no project named {:?} (available: {})",
+                name,
+                project_names(vault)
+            ))),
+            _ => Err(CoreError::InvalidInput(format!(
+                "more than one project is named {name:?} — rename one in the app first"
+            ))),
+        };
+    }
+
+    if let [id] = by_name(&bundle.project_name).as_slice() {
+        return Ok(*id);
+    }
+
+    if let Some(cwd) = cwd {
+        if let Some(project) = find_project(vault, cwd) {
+            return Ok(project.id);
+        }
+    }
+
+    Err(CoreError::InvalidInput(format!(
+        "cannot tell which project to import into — pass --project (available: {})",
+        project_names(vault)
+    )))
+}
+
+fn project_names(vault: &envvault_core::vault::Vault) -> String {
+    if vault.projects.is_empty() {
+        return "none yet — add one in the app".into();
+    }
+    vault
+        .projects
+        .iter()
+        .map(|p| p.name.as_str())
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+fn friendly_bundle_error(e: CoreError) -> String {
+    match e {
+        CoreError::BundleWrongKey => {
+            "that passphrase or key does not open this bundle — for key-encrypted bundles, \
+             the sender must encrypt to YOUR share key (shown in the EnvVault app)"
+                .into()
+        }
+        CoreError::BundleExpired { expired_at } => format!(
+            "this bundle expired on {} — ask the sender for a fresh one",
+            expired_at.format("%Y-%m-%d %H:%M UTC")
+        ),
+        other => other.to_string(),
+    }
 }
 
 fn read_passphrase(from_stdin: bool) -> Result<SecretString, String> {

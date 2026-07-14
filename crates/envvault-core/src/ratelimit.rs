@@ -102,12 +102,52 @@ pub fn unlock_vault_guarded(
     vault_path: &Path,
     passphrase: age::secrecy::SecretString,
 ) -> Result<crate::vault::UnlockedVault, CoreError> {
+    guarded(vault_path, || {
+        crate::vault::unlock_vault(vault_path, passphrase)
+    })
+}
+
+/// Rate-limited [`crate::vault::update_vault_try`]. Anything that tries the
+/// master password counts toward the same persisted throttle — otherwise an
+/// import command would be an unthrottled password oracle.
+pub fn update_vault_guarded<F, T>(
+    vault_path: &Path,
+    passphrase: age::secrecy::SecretString,
+    f: F,
+) -> Result<T, CoreError>
+where
+    F: FnOnce(&mut crate::vault::Vault) -> Result<T, CoreError>,
+{
+    guarded(vault_path, || {
+        crate::vault::update_vault_try(vault_path, passphrase, f)
+    })
+}
+
+/// Rate-limited [`crate::vault::unwrap_vault_identity`] — same reasoning.
+pub fn unwrap_vault_identity_guarded(
+    vault_path: &Path,
+    password: &age::secrecy::SecretString,
+) -> Result<age::x25519::Identity, CoreError> {
+    guarded(vault_path, || {
+        crate::vault::unwrap_vault_identity(vault_path, password)
+    })
+}
+
+/// The shared throttle harness: refuse while a delay is pending, clear the
+/// counter on a successful password use, and count a wrong password. Errors
+/// other than `WrongPassword` (I/O, corrupt file, a failed mutation after a
+/// correct password) leave the counter untouched — fail-safe in the stricter
+/// direction.
+fn guarded<T>(
+    vault_path: &Path,
+    attempt: impl FnOnce() -> Result<T, CoreError>,
+) -> Result<T, CoreError> {
     let now = now_unix();
     check_at(vault_path, now)?;
-    match crate::vault::unlock_vault(vault_path, passphrase) {
-        Ok(unlocked) => {
+    match attempt() {
+        Ok(value) => {
             record_success(vault_path);
-            Ok(unlocked)
+            Ok(value)
         }
         Err(CoreError::WrongPassword { .. }) => {
             let remaining = record_failure_at(vault_path, now_unix());

@@ -5,10 +5,14 @@ import {
   Activity,
   FolderPlus,
   FolderLock,
+  HardDriveDownload,
+  Inbox,
+  KeyRound,
   KeySquare,
   Layers,
   Lock,
   Plus,
+  Share2,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { useVault, useSelectedProject } from "../../store";
@@ -29,6 +33,11 @@ interface CommandPaletteProps {
   onAddProject: () => void;
   onAddEnv: () => void;
   onShowHealth: () => void;
+  /** Null when the selected environment has nothing to share. */
+  onShareEnv: (() => void) | null;
+  onImportBundle: () => void;
+  onVaultBackup: () => void;
+  onShareKey: () => void;
 }
 
 export function CommandPalette({
@@ -39,10 +48,15 @@ export function CommandPalette({
   onAddProject,
   onAddEnv,
   onShowHealth,
+  onShareEnv,
+  onImportBundle,
+  onVaultBackup,
+  onShareKey,
 }: CommandPaletteProps) {
   const projects = useVault((s) => s.projects);
   const selectProject = useVault((s) => s.selectProject);
   const selectEnv = useVault((s) => s.selectEnv);
+  const selectedEnvId = useVault((s) => s.selectedEnvId);
   const project = useSelectedProject();
 
   const [query, setQuery] = useState("");
@@ -65,7 +79,29 @@ export function CommandPalette({
       { id: "add-project", label: "Add project", icon: FolderPlus, run: onAddProject },
       { id: "add-env", label: "Add environment", icon: Layers, run: onAddEnv },
       { id: "lock", label: "Lock vault", hint: "⌘L", icon: Lock, run: onLock },
+      {
+        id: "import-bundle",
+        label: "Import share bundle",
+        icon: Inbox,
+        run: onImportBundle,
+      },
+      {
+        id: "vault-backup",
+        label: "Backup & portability",
+        icon: HardDriveDownload,
+        run: onVaultBackup,
+      },
+      { id: "share-key", label: "My share key", icon: KeyRound, run: onShareKey },
     ];
+    if (onShareEnv) {
+      const envName = project?.environments.find((e) => e.id === selectedEnvId)?.name;
+      list.splice(1, 0, {
+        id: "share-env",
+        label: `Share ${envName ?? "environment"}`,
+        icon: Share2,
+        run: onShareEnv,
+      });
+    }
     for (const env of project?.environments ?? []) {
       list.push({
         id: `env-${env.id}`,
@@ -87,11 +123,16 @@ export function CommandPalette({
   }, [
     projects,
     project,
+    selectedEnvId,
     onLock,
     onNewSecret,
     onAddProject,
     onAddEnv,
     onShowHealth,
+    onShareEnv,
+    onImportBundle,
+    onVaultBackup,
+    onShareKey,
     selectEnv,
     selectProject,
   ]);

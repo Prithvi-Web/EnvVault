@@ -21,7 +21,9 @@ uuid = { version = "1", features = ["v4", "serde"] }
 chrono = { version = "0.4", features = ["serde"] }
 secrecy = "0.10"
 zeroize = { version = "1", features = ["derive"] }
-age = { version = "0.12", features = ["armor"] }
+# "ssh" enables encrypting share bundles to ssh-ed25519 / ssh-rsa public keys
+# (spec F8). It adds only pure crypto crates — the no-HTTP audit still passes.
+age = { version = "0.12", features = ["armor", "ssh"] }
 dirs = "6"
 fs2 = "0.4"
 notify = "8"

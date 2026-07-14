@@ -47,6 +47,20 @@ pub enum CoreError {
     #[error("that item no longer exists — it may have been removed elsewhere")]
     StaleId,
 
+    #[error("this share bundle expired on {expired_at}")]
+    BundleExpired {
+        expired_at: chrono::DateTime<chrono::Utc>,
+    },
+
+    #[error("not a valid EnvVault share bundle: {0}")]
+    BundleInvalid(String),
+
+    #[error("that passphrase or key does not open this bundle")]
+    BundleWrongKey,
+
+    #[error("not a valid age or SSH public key: {0}")]
+    InvalidRecipientKey(String),
+
     #[error("could not determine the OS application-data directory")]
     NoDataDir,
 

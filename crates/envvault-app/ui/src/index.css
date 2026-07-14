@@ -286,7 +286,9 @@ kbd {
 
 @media (prefers-reduced-motion: reduce) {
   .rise-in,
-  .shake {
+  .shake,
+  .dialog-panel,
+  .palette {
     animation: none;
   }
   * {
@@ -552,7 +554,21 @@ button.status-pill:hover {
   box-shadow:
     inset 0 1px 0 rgba(255, 255, 255, 0.07),
     0 24px 70px rgba(0, 0, 0, 0.55);
-  animation: rise-in 160ms cubic-bezier(0.2, 0.9, 0.3, 1) both;
+  /* Dedicated keyframes: `rise-in` ends at `transform: none`, which (fill:
+     both) would wipe the centering translate and pin the panel's top-left
+     to the viewport center — clipping tall dialogs off-window. */
+  animation: dialog-in 160ms cubic-bezier(0.2, 0.9, 0.3, 1) both;
+}
+
+@keyframes dialog-in {
+  from {
+    opacity: 0;
+    transform: translate(-50%, -50%) translateY(6px) scale(0.995);
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, -50%);
+  }
 }
 
 .palette {
@@ -567,7 +583,19 @@ button.status-pill:hover {
   background: #14171ff5;
   box-shadow: 0 24px 70px rgba(0, 0, 0, 0.55);
   overflow: hidden;
-  animation: rise-in 140ms cubic-bezier(0.2, 0.9, 0.3, 1) both;
+  /* Same reason as .dialog-panel: keep the centering translateX. */
+  animation: palette-in 140ms cubic-bezier(0.2, 0.9, 0.3, 1) both;
+}
+
+@keyframes palette-in {
+  from {
+    opacity: 0;
+    transform: translateX(-50%) translateY(6px) scale(0.995);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(-50%);
+  }
 }
 
 .palette input {

@@ -268,6 +268,97 @@ impl Vault {
         }
         Ok(())
     }
+
+    /// Merge another vault into this one (spec F9 import-merge). The policy
+    /// is deterministic and documented in the UI:
+    ///
+    /// - Projects match by path, then by name (case-insensitive); unmatched
+    ///   projects are added whole.
+    /// - Environments match by name (case-insensitive); unmatched ones are
+    ///   added whole.
+    /// - Secrets match by key. A differing value is taken from the import
+    ///   ("the imported file wins"), keeping the existing id and `created_at`.
+    ///   An identical value changes nothing.
+    /// - This vault's settings are kept; the imported file's are ignored.
+    pub fn merge_from(&mut self, other: Vault) -> MergeReport {
+        let mut report = MergeReport::default();
+
+        for incoming_project in other.projects {
+            let index = self
+                .projects
+                .iter()
+                .position(|p| p.path == incoming_project.path)
+                .or_else(|| {
+                    self.projects
+                        .iter()
+                        .position(|p| p.name.eq_ignore_ascii_case(&incoming_project.name))
+                });
+
+            match index.and_then(|i| self.projects.get_mut(i)) {
+                None => {
+                    report.projects_added += 1;
+                    report.secrets_added += incoming_project
+                        .environments
+                        .iter()
+                        .map(|e| e.secrets.len() as u32)
+                        .sum::<u32>();
+                    self.projects.push(incoming_project);
+                }
+                Some(existing) => merge_project(existing, incoming_project, &mut report),
+            }
+        }
+        report
+    }
+}
+
+/// Counts from a vault merge, shown to the user afterwards.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct MergeReport {
+    pub projects_added: u32,
+    pub environments_added: u32,
+    pub secrets_added: u32,
+    pub secrets_updated: u32,
+}
+
+fn merge_project(existing: &mut Project, incoming: Project, report: &mut MergeReport) {
+    for incoming_env in incoming.environments {
+        match existing
+            .environments
+            .iter_mut()
+            .find(|e| e.name.eq_ignore_ascii_case(&incoming_env.name))
+        {
+            None => {
+                report.environments_added += 1;
+                report.secrets_added += incoming_env.secrets.len() as u32;
+                existing.environments.push(incoming_env);
+            }
+            Some(env) => {
+                for incoming_secret in incoming_env.secrets {
+                    match env
+                        .secrets
+                        .iter_mut()
+                        .find(|s| s.key == incoming_secret.key)
+                    {
+                        None => {
+                            report.secrets_added += 1;
+                            env.secrets.push(incoming_secret);
+                        }
+                        Some(secret) => {
+                            if secret.value != incoming_secret.value {
+                                // Imported file wins; keep our id/created_at.
+                                secret.value = incoming_secret.value;
+                                secret.note = incoming_secret.note;
+                                secret.rotated_at = incoming_secret.rotated_at;
+                                secret.detected_type = incoming_secret.detected_type;
+                                secret.exposed_in_git_at = incoming_secret.exposed_in_git_at;
+                                report.secrets_updated += 1;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
 }
 
 /// Fields to change on a secret. `None` = leave untouched. For `note`,
@@ -509,6 +600,14 @@ impl UnlockedVault {
         &self.path
     }
 
+    /// The vault's X25519 public key. Doubles as the user's **share key**
+    /// (spec F8): teammates encrypt bundles to it, and the vault identity —
+    /// unwrapped with the master password — decrypts them. Public material;
+    /// safe to display and copy.
+    pub fn recipient(&self) -> &x25519::Recipient {
+        &self.recipient
+    }
+
     /// Serialize, encrypt, and atomically persist the vault.
     pub fn save(&self) -> Result<(), CoreError> {
         let plaintext = Zeroizing::new(serde_json::to_vec(&self.vault)?);
@@ -601,11 +700,42 @@ pub fn update_vault<F>(path: &Path, passphrase: SecretString, f: F) -> Result<()
 where
     F: FnOnce(&mut Vault),
 {
+    update_vault_try(path, passphrase, |vault| {
+        f(vault);
+        Ok(())
+    })
+}
+
+/// Like [`update_vault`], but the mutation can fail and can return a value.
+/// On `Err` nothing is written — the vault on disk stays exactly as it was.
+pub fn update_vault_try<F, T>(path: &Path, passphrase: SecretString, f: F) -> Result<T, CoreError>
+where
+    F: FnOnce(&mut Vault) -> Result<T, CoreError>,
+{
     let _lock = VaultLock::acquire(path)?;
     let mut unlocked = unlock_vault(path, passphrase)?;
-    f(unlocked.vault_mut());
+    let value = f(unlocked.vault_mut())?;
     // Skip re-acquiring the lock we already hold.
-    unlocked.save_locked_held()
+    unlocked.save_locked_held()?;
+    Ok(value)
+}
+
+/// Unwrap the vault's X25519 identity with the master password — used to
+/// decrypt share bundles that were encrypted to this vault's share key. The
+/// caller must drop the identity as soon as the decryption is done; nothing
+/// long-lived may hold it.
+pub fn unwrap_vault_identity(
+    path: &Path,
+    password: &SecretString,
+) -> Result<x25519::Identity, CoreError> {
+    let envelope = read_envelope(path)?;
+    let identity = crypto::unwrap_identity(&envelope.wrapped_identity, password)
+        .map_err(|e| map_crypto(e, path))?;
+    // Same stitched-envelope sanity check as unlock.
+    if identity.to_public().to_string() != envelope.recipient {
+        return Err(corrupted(path, "identity does not match recipient".into()));
+    }
+    Ok(identity)
 }
 
 impl UnlockedVault {
@@ -628,6 +758,50 @@ impl UnlockedVault {
         let bytes = serde_json::to_vec_pretty(&envelope)?;
         atomic_write_unlocked(&self.path, &bytes)
     }
+}
+
+// ---------------------------------------------------------------------------
+// Backup & portability (spec F9)
+// ---------------------------------------------------------------------------
+
+/// What a vault file reveals without any password: only that it is a valid
+/// EnvVault file and whether a recovery key was configured.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct VaultFileInfo {
+    pub has_recovery_recipient: bool,
+}
+
+/// Check that `path` is a readable, well-formed EnvVault file (envelope
+/// only — no password needed, nothing decrypted).
+pub fn validate_vault_file(path: &Path) -> Result<VaultFileInfo, CoreError> {
+    let envelope = read_envelope(path)?;
+    Ok(VaultFileInfo {
+        has_recovery_recipient: envelope.recovery_recipient.is_some(),
+    })
+}
+
+/// Export a copy of the encrypted vault file to `dest` (spec F9). The vault
+/// is already ciphertext — the copy is safe to put anywhere. Validates the
+/// source first so a corrupted vault is never exported as a "backup", and
+/// fsyncs the destination so the backup actually exists once we report it.
+pub fn export_vault_copy(vault_path: &Path, dest: &Path) -> Result<(), CoreError> {
+    validate_vault_file(vault_path)?;
+    // Hold the lock so an in-flight save cannot be copied half-replaced.
+    let _lock = VaultLock::acquire(vault_path)?;
+    fs::copy(vault_path, dest)?;
+    fsync_file(dest)?;
+    Ok(())
+}
+
+/// Replace the live vault file with `source` (spec F9 import-replace). The
+/// source is validated first; the write is atomic and the previous vault is
+/// kept in the rolling backups, so a mistaken replace is recoverable. The
+/// caller must lock any open session afterwards — the imported file opens
+/// with **its own** master password.
+pub fn replace_vault_file(vault_path: &Path, source: &Path) -> Result<(), CoreError> {
+    validate_vault_file(source)?;
+    let bytes = fs::read(source)?;
+    atomic_write_with_backups(vault_path, &bytes)
 }
 
 // ---------------------------------------------------------------------------

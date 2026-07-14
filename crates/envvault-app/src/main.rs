@@ -53,6 +53,15 @@ fn specta_builder() -> Builder<tauri::Wry> {
             commands::set_guard_enabled,
             commands::set_project_guard_enabled,
             commands::health_report,
+            commands::share_key,
+            commands::export_share_bundle,
+            commands::inspect_share_bundle,
+            commands::preview_share_import,
+            commands::confirm_share_import,
+            commands::cancel_share_import,
+            commands::export_vault_backup,
+            commands::import_vault_merge,
+            commands::import_vault_replace,
         ])
         .events(collect_events![
             events::VaultLockedEvent,

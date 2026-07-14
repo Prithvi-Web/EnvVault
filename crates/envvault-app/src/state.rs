@@ -5,12 +5,17 @@ use std::sync::atomic::AtomicU64;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Instant;
 
+use envvault_core::share::ShareBundle;
 use envvault_core::vault::UnlockedVault;
 
 pub struct AppState {
     session: Mutex<Option<UnlockedVault>>,
     last_activity: Mutex<Instant>,
     auto_lock_minutes: Mutex<Option<u32>>,
+    /// A decrypted share bundle between "preview" and "confirm import". Kept
+    /// in Rust so the plaintext never crosses to the frontend; dropped
+    /// (zeroizing every value) on confirm, cancel, or lock.
+    pending_share: Mutex<Option<ShareBundle>>,
     /// Bumped on every secret copy; lets a stale auto-clear timer detect that
     /// a newer copy owns the clipboard. Arc so timer threads can hold it.
     pub clipboard_generation: Arc<AtomicU64>,
@@ -29,6 +34,7 @@ impl AppState {
             session: Mutex::new(None),
             last_activity: Mutex::new(Instant::now()),
             auto_lock_minutes: Mutex::new(None),
+            pending_share: Mutex::new(None),
             clipboard_generation: Arc::new(AtomicU64::new(0)),
         }
     }
@@ -45,9 +51,22 @@ impl AppState {
     }
 
     /// Drop the session (zeroizing all secrets). Returns whether a session
-    /// actually existed.
+    /// actually existed. A half-finished share import dies with it.
     pub fn lock_now(&self) -> bool {
+        unpoisoned(&self.pending_share).take();
         unpoisoned(&self.session).take().is_some()
+    }
+
+    pub fn set_pending_share(&self, bundle: ShareBundle) {
+        *unpoisoned(&self.pending_share) = Some(bundle);
+    }
+
+    pub fn pending_share(&self) -> MutexGuard<'_, Option<ShareBundle>> {
+        unpoisoned(&self.pending_share)
+    }
+
+    pub fn clear_pending_share(&self) {
+        unpoisoned(&self.pending_share).take();
     }
 
     pub fn is_unlocked(&self) -> bool {

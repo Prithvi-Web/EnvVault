@@ -400,6 +400,267 @@ fn sigterm_to_wrapper_is_forwarded_to_child() {
     assert_eq!(out.status.code(), Some(9), "child exit code must propagate");
 }
 
+// ---------------------------------------------------------------------------
+// import (spec F8) — the recipient side of Secure Share
+// ---------------------------------------------------------------------------
+
+/// Build a share bundle in-memory: project "myproj" [development] with
+/// API_KEY (a value that differs from the fixture's) and NEW_KEY.
+fn sender_bundle(expires_in_hours: Option<u32>) -> envvault_core::share::ShareBundle {
+    use envvault_core::vault::Vault;
+    let mut sender = Vault::default();
+    let pid = sender
+        .add_project("myproj".into(), "/somewhere/else/myproj".into())
+        .unwrap();
+    let dev = sender.project(pid).unwrap().environments[0].id;
+    sender
+        .add_secret(
+            pid,
+            dev,
+            "API_KEY".into(),
+            SecretValue::new("rotated-key-456".into()),
+            None,
+        )
+        .unwrap();
+    sender
+        .add_secret(
+            pid,
+            dev,
+            "NEW_KEY".into(),
+            SecretValue::new("brand-new-value".into()),
+            None,
+        )
+        .unwrap();
+    envvault_core::share::bundle_from_environment(
+        &sender,
+        pid,
+        dev,
+        expires_in_hours,
+        chrono::Utc::now(),
+    )
+    .unwrap()
+}
+
+/// Run `envvault import` with the given stdin content, from a neutral cwd.
+fn envvault_import(fixture: &Fixture, bundle_path: &Path, stdin: &str, extra: &[&str]) -> Output {
+    let mut args = vec!["import", bundle_path.to_str().unwrap(), "--password-stdin"];
+    args.extend_from_slice(extra);
+    let mut child = Command::new(env!("CARGO_BIN_EXE_envvault"))
+        .args(&args)
+        .current_dir(fixture._dir.path())
+        .env("ENVVAULT_DEV_VAULT_DIR", &fixture.vault_dir)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn envvault import");
+    child
+        .stdin
+        .take()
+        .expect("stdin")
+        .write_all(stdin.as_bytes())
+        .expect("write stdin");
+    child.wait_with_output().expect("wait")
+}
+
+fn dev_secrets(fixture: &Fixture) -> Vec<(String, String)> {
+    let unlocked = envvault_core::vault::unlock_vault(
+        &fixture.vault_dir.join("vault.age"),
+        SecretString::from(PASSWORD.to_owned()),
+    )
+    .unwrap();
+    unlocked.vault().projects[0].environments[0]
+        .secrets
+        .iter()
+        .map(|s| (s.key.clone(), s.value.expose().to_string()))
+        .collect()
+}
+
+#[test]
+fn imports_a_passphrase_bundle_matching_project_by_name() {
+    let f = fixture();
+    let bundle = sender_bundle(Some(24));
+    let sealed = envvault_core::share::seal_bundle_with_work_factor(
+        &bundle,
+        &envvault_core::share::ShareProtection::Passphrase(SecretString::from(
+            "glacier otter meadow 42".to_owned(),
+        )),
+        10,
+    )
+    .unwrap();
+    let bundle_path = f._dir.path().join("team.age");
+    std::fs::write(&bundle_path, sealed).unwrap();
+
+    let out = envvault_import(
+        &f,
+        &bundle_path,
+        &format!("{PASSWORD}\nglacier otter meadow 42\n"),
+        &[],
+    );
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("myproj [development]: 1 added, 1 updated, 0 unchanged"),
+        "got: {stdout}"
+    );
+
+    let secrets = dev_secrets(&f);
+    assert!(secrets.contains(&("API_KEY".into(), "rotated-key-456".into())));
+    assert!(secrets.contains(&("NEW_KEY".into(), "brand-new-value".into())));
+    assert!(secrets.contains(&("SHARED".into(), "from-development".into())));
+}
+
+#[test]
+fn imports_a_bundle_encrypted_to_the_vault_share_key() {
+    let f = fixture();
+    // The recipient's share key is their vault's public recipient.
+    let share_key = envvault_core::vault::unlock_vault(
+        &f.vault_dir.join("vault.age"),
+        SecretString::from(PASSWORD.to_owned()),
+    )
+    .unwrap()
+    .recipient()
+    .to_string();
+
+    let sealed = envvault_core::share::seal_bundle_with_work_factor(
+        &sender_bundle(None),
+        &envvault_core::share::ShareProtection::RecipientKeys(vec![share_key]),
+        10,
+    )
+    .unwrap();
+    let bundle_path = f._dir.path().join("team.age");
+    std::fs::write(&bundle_path, sealed).unwrap();
+
+    // Key bundles need only the master password on stdin.
+    let out = envvault_import(&f, &bundle_path, &format!("{PASSWORD}\n"), &[]);
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(String::from_utf8_lossy(&out.stdout).contains("1 added, 1 updated"));
+    assert!(dev_secrets(&f).contains(&("NEW_KEY".into(), "brand-new-value".into())));
+}
+
+#[test]
+fn import_creates_a_missing_environment() {
+    let f = fixture();
+    let sealed = envvault_core::share::seal_bundle_with_work_factor(
+        &sender_bundle(None),
+        &envvault_core::share::ShareProtection::Passphrase(SecretString::from(
+            "glacier otter meadow 42".to_owned(),
+        )),
+        10,
+    )
+    .unwrap();
+    let bundle_path = f._dir.path().join("team.age");
+    std::fs::write(&bundle_path, sealed).unwrap();
+
+    let out = envvault_import(
+        &f,
+        &bundle_path,
+        &format!("{PASSWORD}\nglacier otter meadow 42\n"),
+        &["--env", "staging"],
+    );
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(String::from_utf8_lossy(&out.stderr).contains("created environment staging"));
+    assert!(String::from_utf8_lossy(&out.stdout).contains("myproj [staging]: 2 added"));
+
+    let unlocked = envvault_core::vault::unlock_vault(
+        &f.vault_dir.join("vault.age"),
+        SecretString::from(PASSWORD.to_owned()),
+    )
+    .unwrap();
+    let staging = unlocked.vault().projects[0]
+        .environments
+        .iter()
+        .find(|e| e.name == "staging")
+        .expect("staging created");
+    assert!(
+        !staging.is_production,
+        "created env must not guess production"
+    );
+    assert_eq!(staging.secrets.len(), 2);
+}
+
+#[test]
+fn expired_bundle_is_refused_and_vault_is_untouched() {
+    let f = fixture();
+    let sealed = envvault_core::share::seal_bundle_with_work_factor(
+        &sender_bundle(Some(0)), // expires immediately
+        &envvault_core::share::ShareProtection::Passphrase(SecretString::from(
+            "glacier otter meadow 42".to_owned(),
+        )),
+        10,
+    )
+    .unwrap();
+    let bundle_path = f._dir.path().join("expired.age");
+    std::fs::write(&bundle_path, sealed).unwrap();
+
+    let before = dev_secrets(&f);
+    let out = envvault_import(
+        &f,
+        &bundle_path,
+        &format!("{PASSWORD}\nglacier otter meadow 42\n"),
+        &[],
+    );
+    assert!(!out.status.success());
+    assert!(String::from_utf8_lossy(&out.stderr).contains("expired"));
+    assert_eq!(
+        dev_secrets(&f),
+        before,
+        "an expired bundle must change nothing"
+    );
+}
+
+#[test]
+fn wrong_bundle_passphrase_fails_cleanly() {
+    let f = fixture();
+    let sealed = envvault_core::share::seal_bundle_with_work_factor(
+        &sender_bundle(None),
+        &envvault_core::share::ShareProtection::Passphrase(SecretString::from(
+            "glacier otter meadow 42".to_owned(),
+        )),
+        10,
+    )
+    .unwrap();
+    let bundle_path = f._dir.path().join("team.age");
+    std::fs::write(&bundle_path, sealed).unwrap();
+
+    let before = dev_secrets(&f);
+    let out = envvault_import(
+        &f,
+        &bundle_path,
+        &format!("{PASSWORD}\nwrong passphrase\n"),
+        &[],
+    );
+    assert!(!out.status.success());
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("does not open this bundle"),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(dev_secrets(&f), before);
+}
+
+#[test]
+fn garbage_bundle_file_is_a_clear_error() {
+    let f = fixture();
+    let bundle_path = f._dir.path().join("junk.age");
+    std::fs::write(&bundle_path, b"this is not an age file").unwrap();
+    let out = envvault_import(&f, &bundle_path, &format!("{PASSWORD}\n"), &[]);
+    assert!(!out.status.success());
+    assert!(String::from_utf8_lossy(&out.stderr).contains("not an age file"));
+}
+
 #[test]
 fn status_reports_vault_location() {
     let f = fixture();
